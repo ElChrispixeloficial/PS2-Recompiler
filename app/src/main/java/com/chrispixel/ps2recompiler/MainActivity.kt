@@ -241,11 +241,14 @@ class MainActivity : AppCompatActivity() {
         return "iso_${hash}.bin"
     }
 
-    private fun displayName(uri: Uri): String? = contentResolver.query(uri, null, null, null, null)?.use { c ->
-        if (!c.moveToFirst()) return null
-        val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-        if (idx < 0) return null
-        c.getString(idx)
+    private fun displayName(uri: Uri): String? {
+        val cursor = contentResolver.query(uri, null, null, null, null) ?: return null
+        return cursor.use { c ->
+            if (!c.moveToFirst()) return@use null
+            val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx < 0) return@use null
+            c.getString(idx)
+        }
     }
 
     private fun loadLibrary() {
