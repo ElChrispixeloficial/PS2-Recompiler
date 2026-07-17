@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PS2 Recompiler</string>
+    <string name="app_subtitle">Recompilador nativo MIPS → ARM64</string>
+    <string name="library_empty_title">Sin juegos</string>
+    <string name="library_empty_body">Toca + para añadir una ISO de PS2</string>
+    <string name="add_game">Añadir juego</string>
+    <string name="settings">Configuración</string>
+    <string name="about">Acerca de</string>
+    <string name="last_played">Último: %s</string>
+    <string name="never_played">Sin partida</string>
+    <string name="play_game">Jugar</string>
+    <string name="bios_status_ok">BIOS presente ✓</string>
+    <string name="bios_status_missing">BIOS no encontrada</string>
+    <string name="bios_dialog_title">BIOS de PS2 requerida</string>
+    <string name="bios_dialog_body">Copia tu BIOS de PS2 (SCPH-70012.bin) a:\n/sdcard/PS2Recomp/bios/\nDebe ser tu propia copia legal.</string>
+    <string name="bios_dialog_ok">Entendido</string>
+    <string name="bios_select">Seleccionar BIOS</string>
+    <string name="game_loading">Cargando juego…</string>
+    <string name="game_compiling">Compilando bloques ARM64…</string>
+    <string name="resume_game">Reanudar</string>
+    <string name="quit_game">Salir</string>
+    <string name="reset_game">Reiniciar</string>
+    <string name="fps_counter">%d fps</string>
+    <string name="error_load_iso">No se pudo cargar la ISO</string>
+    <string name="error_invalid_iso">Archivo no válido</string>
+    <string name="about_title">PS2 Recompiler v0.1</string>
+    <string name="about_body">Recompilador estático MIPS R5900 → ARM64.\nGráficos: GS → Vulkan\nAudio: SPU2 → OpenSL ES</string>
+</resources>

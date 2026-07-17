@@ -1,0 +1,259 @@
+// ─── SPU2 → Android AudioTrack ───────────────────────────────────────────────
+// El SPU2 (Sound Processing Unit 2) de PS2 mezcla hasta 48 voces PCM
+// y produce 2 canales estéreo a 48000 Hz.
+//
+// En lugar de simular el DSP completo, procesamos los registros SPU2
+// y enviamos el audio PCM directamente al AudioTrack de Android
+// via OpenSL ES / AAudio, que lo pasa directo al hardware de audio.
+// Resultado: audio del juego → bocina/auriculares sin capa de simulación.
+
+#include "spu2_core.h"
+#include <SLES/OpenSLES.h>
+#include <SLES/OpenSLES_Android.h>
+#include <android/log.h>
+#include <cstring>
+#include <cmath>
+
+#define LOG_TAG "PS2-SPU2"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+static constexpr int SAMPLE_RATE   = 48000;
+static constexpr int CHANNELS      = 2;
+static constexpr int NUM_VOICES    = 24;   // SPU2 tiene 2 cores × 24 voces
+static constexpr int BUFFER_FRAMES = 1024; // tamaño del buffer de audio
+static constexpr int NUM_BUFFERS   = 4;    // doble buffering
+
+// ─── Registros SPU2 (por voz) ─────────────────────────────────────────────────
+
+// ─── SPU2_Core ────────────────────────────────────────────────────────────────
+
+// ─── OpenSL ES ────────────────────────────────────────────────────────────────
+static SLObjectItf   sl_engine_obj  = nullptr;
+static SLEngineItf   sl_engine      = nullptr;
+static SLObjectItf   sl_mix_obj     = nullptr;
+static SLObjectItf   sl_player_obj  = nullptr;
+static SLPlayItf     sl_play        = nullptr;
+static SLAndroidSimpleBufferQueueItf sl_queue = nullptr;
+
+static int16_t audio_buffers[NUM_BUFFERS][BUFFER_FRAMES * CHANNELS];
+static int     buf_idx = 0;
+
+static SPU2_Core spu2_state;
+
+// ─── Decodificador ADPCM de PS2 ───────────────────────────────────────────────
+// PS2 usa SPU-ADPCM: bloques de 16 bytes = 28 muestras de 4-bit
+// con factor de predicción de 2 coeficientes.
+
+static const int ADPCM_COEF[5][2] = {
+    {0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}
+};
+
+static void decode_adpcm_block(const uint8_t* block, int16_t* out,
+                                int16_t* prev1, int16_t* prev2) {
+    uint8_t shift = block[0] & 0x0F;
+    uint8_t filter= (block[0] >> 4) & 0x07;
+    if (filter > 4) filter = 4;
+
+    int f0 = ADPCM_COEF[filter][0];
+    int f1 = ADPCM_COEF[filter][1];
+
+    for (int i = 0; i < 28; i++) {
+        int nibble = (i & 1) ? (block[2 + i/2] >> 4) : (block[2 + i/2] & 0xF);
+        int sample = (int16_t)(nibble << 12) >> shift;
+        sample = (sample + (*prev1 * f0 + *prev2 * f1 + 32) >> 6);
+
+        if (sample >  32767) sample =  32767;
+        if (sample < -32768) sample = -32768;
+
+        out[i] = (int16_t)sample;
+        *prev2 = *prev1;
+        *prev1 = (int16_t)sample;
+    }
+}
+
+// ─── Mezcla de voces → buffer PCM estéreo ────────────────────────────────────
+static void mix_voices(int16_t* output, int frames) {
+    memset(output, 0, frames * CHANNELS * sizeof(int16_t));
+
+    for (int v = 0; v < NUM_VOICES; v++) {
+        SPU2_Voice& voice = spu2_state.voices[v];
+        if (!voice.active) continue;
+
+        for (int i = 0; i < frames; i++) {
+            // Calcular posición en muestra ADPCM
+            uint32_t addr = voice.current_addr;
+            if (addr + 16 >= sizeof(spu2_state.spu_ram)) {
+                voice.active = false;
+                break;
+            }
+
+            // Decodificar bloque ADPCM si estamos al inicio de uno
+            static int16_t decoded[28];
+            static int     decoded_pos = 0;
+            static uint32_t last_addr = 0xFFFFFFFF;
+
+            if (addr != last_addr || decoded_pos >= 28) {
+                decode_adpcm_block(spu2_state.spu_ram + addr,
+                                   decoded,
+                                   &voice.adpcm_prev[0],
+                                   &voice.adpcm_prev[1]);
+                last_addr   = addr;
+                decoded_pos = 0;
+            }
+
+            int16_t sample = decoded[decoded_pos];
+
+            // Aplicar envelope ADSR
+            int32_t env = voice.env_level >> 15;
+            sample = (sample * env) >> 15;
+
+            // Aplicar volumen L/R y mezclar
+            int32_t l = (int32_t)output[i*2  ] + (sample * voice.vol_left  >> 15);
+            int32_t r = (int32_t)output[i*2+1] + (sample * voice.vol_right >> 15);
+
+            // Clamp
+            output[i*2  ] = (l >  32767) ?  32767 : (l < -32768) ? -32768 : l;
+            output[i*2+1] = (r >  32767) ?  32767 : (r < -32768) ? -32768 : r;
+
+            // Avanzar posición según pitch (0x1000 = velocidad normal)
+            decoded_pos++;
+            if (decoded_pos >= 28) {
+                // Verificar flag de loop en el bloque ADPCM
+                uint8_t flags = spu2_state.spu_ram[addr + 1];
+                bool loop_end  = (flags & 0x01) != 0;
+                bool loop_start= (flags & 0x04) != 0;
+
+                if (loop_end) {
+                    if (voice.loop_enabled) {
+                        voice.current_addr = voice.loop_addr;
+                    } else {
+                        voice.active = false;
+                    }
+                } else {
+                    voice.current_addr += 16;
+                }
+                decoded_pos = 0;
+            }
+        }
+    }
+
+    // Aplicar volumen master
+    for (int i = 0; i < frames; i++) {
+        output[i*2  ] = (output[i*2  ] * spu2_state.master_vol_l) >> 15;
+        output[i*2+1] = (output[i*2+1] * spu2_state.master_vol_r) >> 15;
+    }
+}
+
+// ─── Callback de OpenSL ES — se llama cuando el hardware pide más audio ───────
+static void audio_callback(SLAndroidSimpleBufferQueueItf queue, void*) {
+    int16_t* buf = audio_buffers[buf_idx];
+    mix_voices(buf, BUFFER_FRAMES);
+
+    // Encolar directamente al hardware de audio (0 overhead de sistema)
+    (*queue)->Enqueue(queue, buf, BUFFER_FRAMES * CHANNELS * sizeof(int16_t));
+
+    buf_idx = (buf_idx + 1) % NUM_BUFFERS;
+}
+
+// ─── Inicialización ───────────────────────────────────────────────────────────
+bool SPU2_init() {
+    memset(&spu2_state, 0, sizeof(spu2_state));
+    spu2_state.master_vol_l = 0x7FFF;
+    spu2_state.master_vol_r = 0x7FFF;
+
+    // Crear engine OpenSL ES
+    SLEngineOption opts[] = {{ SL_ENGINEOPTION_THREADSAFE, SL_BOOLEAN_TRUE }};
+    if (slCreateEngine(&sl_engine_obj, 1, opts, 0, nullptr, nullptr) != SL_RESULT_SUCCESS) {
+        LOGE("slCreateEngine falló");
+        return false;
+    }
+    (*sl_engine_obj)->Realize(sl_engine_obj, SL_BOOLEAN_FALSE);
+    (*sl_engine_obj)->GetInterface(sl_engine_obj, SL_IID_ENGINE, &sl_engine);
+
+    // Crear output mix
+    (*sl_engine)->CreateOutputMix(sl_engine, &sl_mix_obj, 0, nullptr, nullptr);
+    (*sl_mix_obj)->Realize(sl_mix_obj, SL_BOOLEAN_FALSE);
+
+    // Crear player
+    SLDataLocator_AndroidSimpleBufferQueue bq_loc = {
+        SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, NUM_BUFFERS
+    };
+    SLDataFormat_PCM pcm = {
+        SL_DATAFORMAT_PCM,
+        (SLuint32)CHANNELS,
+        SL_SAMPLINGRATE_48,
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        SL_PCMSAMPLEFORMAT_FIXED_16,
+        SL_SPEAKER_FRONT_LEFT | SL_SPEAKER_FRONT_RIGHT,
+        SL_BYTEORDER_LITTLEENDIAN,
+    };
+    SLDataSource src = { &bq_loc, &pcm };
+    SLDataLocator_OutputMix out_loc = { SL_DATALOCATOR_OUTPUTMIX, sl_mix_obj };
+    SLDataSink   sink = { &out_loc, nullptr };
+
+    const SLInterfaceID iids[] = { SL_IID_ANDROIDSIMPLEBUFFERQUEUE };
+    const SLboolean req[] = { SL_BOOLEAN_TRUE };
+
+    (*sl_engine)->CreateAudioPlayer(sl_engine, &sl_player_obj, &src, &sink, 1, iids, req);
+    (*sl_player_obj)->Realize(sl_player_obj, SL_BOOLEAN_FALSE);
+    (*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_PLAY, &sl_play);
+    (*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &sl_queue);
+
+    // Registrar callback — el hardware llama esto cuando necesita más muestras
+    (*sl_queue)->RegisterCallback(sl_queue, audio_callback, nullptr);
+
+    // Pre-llenar el queue
+    for (int i = 0; i < NUM_BUFFERS; i++) {
+        memset(audio_buffers[i], 0, sizeof(audio_buffers[i]));
+        (*sl_queue)->Enqueue(sl_queue, audio_buffers[i],
+                             BUFFER_FRAMES * CHANNELS * sizeof(int16_t));
+    }
+
+    (*sl_play)->SetPlayState(sl_play, SL_PLAYSTATE_PLAYING);
+    LOGI("SPU2 iniciado: %d Hz, %d voces → bocina/auriculares Android",
+         SAMPLE_RATE, NUM_VOICES);
+    return true;
+}
+
+// ─── Escritura de registros SPU2 (desde el IOP) ───────────────────────────────
+void SPU2_write_reg(uint32_t addr, uint16_t val) {
+    // Registros por voz: base 0x1F801C00, stride 16 bytes por voz
+    if (addr >= 0x1F801C00 && addr < 0x1F801C00 + NUM_VOICES * 16) {
+        uint32_t off   = addr - 0x1F801C00;
+        uint32_t voice = off / 16;
+        uint32_t reg   = off % 16;
+
+        switch (reg) {
+        case 0: spu2_state.voices[voice].vol_left  = val; break;
+        case 2: spu2_state.voices[voice].vol_right = val; break;
+        case 4: spu2_state.voices[voice].pitch     = val; break;
+        case 6: // ADSR Lo
+            spu2_state.voices[voice].adsr_lo = val; break;
+        case 8: // ADSR Hi
+            spu2_state.voices[voice].adsr_hi = val; break;
+        }
+    }
+}
+
+// Key On: activa la voz
+void SPU2_key_on(uint32_t voice_mask) {
+    for (int v = 0; v < NUM_VOICES; v++) {
+        if (voice_mask & (1 << v)) {
+            spu2_state.voices[v].active        = true;
+            spu2_state.voices[v].current_addr  = spu2_state.voices[v].start_addr;
+            spu2_state.voices[v].env_level     = 0;
+            spu2_state.voices[v].adsr_phase    = 0;  // attack
+            memset(spu2_state.voices[v].adpcm_prev, 0, sizeof(spu2_state.voices[v].adpcm_prev));
+        }
+    }
+}
+
+// Key Off: inicia release
+void SPU2_key_off(uint32_t voice_mask) {
+    for (int v = 0; v < NUM_VOICES; v++) {
+        if (voice_mask & (1 << v)) {
+            spu2_state.voices[v].adsr_phase = 3;  // release
+        }
+    }
+}

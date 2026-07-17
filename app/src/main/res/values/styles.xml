@@ -1,0 +1,9 @@
+<resources>
+
+    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
+        <item name="colorPrimary">@color/ps2_blue</item>
+        <item name="colorPrimaryDark">@color/ps2_blue_dark</item>
+        <item name="colorAccent">@color/ps2_teal</item>
+    </style>
+
+</resources>

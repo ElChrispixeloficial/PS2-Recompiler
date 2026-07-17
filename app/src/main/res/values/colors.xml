@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ps2_blue">#003087</color>
+    <color name="ps2_blue_dark">#001A52</color>
+    <color name="ps2_blue_container">#D0E4FF</color>
+    <color name="ps2_silver">#B0B8C8</color>
+    <color name="ps2_teal">#00A9A5</color>
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+    <color name="runtime_overlay">#CC000000</color>
+    <color name="runtime_bar">#AA001A52</color>
+    <color name="bios_ok">#2E7D32</color>
+    <color name="bios_missing">#C62828</color>
+</resources>
