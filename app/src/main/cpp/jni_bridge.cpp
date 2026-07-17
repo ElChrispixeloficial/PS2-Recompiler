@@ -274,8 +274,10 @@ JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeS
 
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeResume(JNIEnv*, jobject) {
     if (!g_ee) return;
-    if (!g_running) { g_running=true; g_paused=false; g_cpu_thread=std::thread(cpu_loop); }
-    else { g_paused=false; }
+    if (!g_running) {
+        if (g_cpu_thread.joinable()) g_cpu_thread.detach();
+        g_running=true; g_paused=false; g_cpu_thread=std::thread(cpu_loop);
+    } else { g_paused=false; }
 }
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativePause(JNIEnv*, jobject) { g_paused=true; }
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeReset(JNIEnv*, jobject) { full_cleanup(); }

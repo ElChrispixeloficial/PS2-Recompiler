@@ -97,9 +97,17 @@ PS2_LoadResult ISO_Loader::load(const char* iso_path, uint8_t* ee_ram, size_t ee
     uint32_t root_lba  = pvd.root_dir.lba_le;
     uint32_t root_size = pvd.root_dir.size_le;
 
+    if (root_size == 0 || root_size > 16 * 1024 * 1024) {
+        LOGE("ERROR: root_size invalido: %u bytes", root_size);
+        fclose(f); return result;
+    }
+
     std::vector<uint8_t> dir_data(root_size);
     fseek(f, root_lba * SECTOR_SIZE, SEEK_SET);
-    fread(dir_data.data(), 1, root_size, f);
+    if (fread(dir_data.data(), 1, root_size, f) < root_size) {
+        LOGE("ERROR: No se pudo leer directorio raiz completo");
+        fclose(f); return result;
+    }
 
     uint32_t cnf_lba = 0, cnf_size = 0;
     uint32_t exe_lba = 0, exe_size = 0;
@@ -118,9 +126,17 @@ PS2_LoadResult ISO_Loader::load(const char* iso_path, uint8_t* ee_ram, size_t ee
 
     if (!cnf_lba) { LOGE("SYSTEM.CNF no encontrado"); fclose(f); return result; }
 
+    if (cnf_size == 0 || cnf_size > 1024 * 1024) {
+        LOGE("SYSTEM.CNF size invalido: %u", cnf_size);
+        fclose(f); return result;
+    }
+
     std::vector<char> cnf(cnf_size + 1, 0);
     fseek(f, cnf_lba * SECTOR_SIZE, SEEK_SET);
-    fread(cnf.data(), 1, cnf_size, f);
+    if (fread(cnf.data(), 1, cnf_size, f) < cnf_size) {
+        LOGE("ERROR: No se pudo leer SYSTEM.CNF completo");
+        fclose(f); return result;
+    }
     LOGI("SYSTEM.CNF:\n%s", cnf.data());
 
     const char* boot2 = strstr(cnf.data(), "BOOT2");
@@ -148,19 +164,34 @@ PS2_LoadResult ISO_Loader::load(const char* iso_path, uint8_t* ee_ram, size_t ee
     }
 
     if (!exe_lba) { LOGE("EXE %s no encontrado", exe_name); fclose(f); return result; }
+    if (exe_size == 0 || exe_size > 32 * 1024 * 1024) {
+        LOGE("EXE %s size invalido: %u bytes", exe_name, exe_size);
+        fclose(f); return result;
+    }
 
     std::vector<uint8_t> elf_data(exe_size);
     fseek(f, exe_lba * SECTOR_SIZE, SEEK_SET);
-    fread(elf_data.data(), 1, exe_size, f);
+    if (fread(elf_data.data(), 1, exe_size, f) < exe_size) {
+        LOGE("ERROR: No se pudo leer ELF completo (%u bytes)", exe_size);
+        fclose(f); return result;
+    }
     fclose(f);
 
     ELF32_Header* elf = reinterpret_cast<ELF32_Header*>(elf_data.data());
+    if (exe_size < sizeof(ELF32_Header)) {
+        LOGE("ELF demasiado pequeno para header (%u bytes)", exe_size); return result;
+    }
     if (elf->magic[0] != 0x7F || elf->magic[1] != 'E' || elf->magic[2] != 'L' || elf->magic[3] != 'F') {
         LOGE("No es un ELF valido"); return result;
     }
     if (elf->machine != 8) { LOGE("ELF no es MIPS (machine=%d)", elf->machine); return result; }
 
     LOGI("ELF entry: 0x%08X, %d program headers", elf->entry, elf->phnum);
+
+    if (elf->phoff + (uint32_t)elf->phnum * sizeof(ELF32_ProgramHeader) > exe_size) {
+        LOGE("Program headers fuera del ELF: phoff=%u phnum=%u elf_size=%u", elf->phoff, elf->phnum, exe_size);
+        return result;
+    }
 
     auto* phdrs = reinterpret_cast<ELF32_ProgramHeader*>(elf_data.data() + elf->phoff);
     for (int i = 0; i < elf->phnum; i++) {
@@ -169,6 +200,10 @@ PS2_LoadResult ISO_Loader::load(const char* iso_path, uint8_t* ee_ram, size_t ee
         uint32_t dest = ph.vaddr & 0x1FFFFFFFu;
         if (dest + ph.memsz > ee_ram_size) {
             LOGE("Segmento %d fuera de RAM: 0x%08X + 0x%X", i, dest, ph.memsz);
+            continue;
+        }
+        if (ph.offset + ph.filesz > exe_size) {
+            LOGE("Segmento %d: fuente fuera del ELF: offset=%u filesz=%u exe_size=%u", i, ph.offset, ph.filesz, exe_size);
             continue;
         }
         if (ph.filesz > 0) memcpy(ee_ram + dest, elf_data.data() + ph.offset, ph.filesz);

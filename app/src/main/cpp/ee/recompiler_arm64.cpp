@@ -1,5 +1,5 @@
 // ee/recompiler_arm64.cpp
-// Dynamic recompiler MIPS R5900 → ARM64 (AArch64) — traducción nativa pura.
+// Dynamic recompiler MIPS R5900 → ARM64 (AArch64) — 100% Nativo
 
 #include "recompiler_arm64.h"
 #include "ee_memory.h"
@@ -11,7 +11,6 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-// ─── Offsets dentro de EE_State ───────────────────────────────────────────────
 static constexpr uint32_t OFF_GPR_LO = offsetof(EE_State, gpr_lo);
 static constexpr uint32_t OFF_HI     = offsetof(EE_State, hi);
 static constexpr uint32_t OFF_LO     = offsetof(EE_State, lo);
@@ -20,7 +19,6 @@ static constexpr uint32_t OFF_COP0   = offsetof(EE_State, cop0);
 
 static inline uint32_t gpr_off(uint32_t r) { return OFF_GPR_LO + r * 8; }
 
-// ─── Cursor de emisión ARM64 ─────────────────────────────────────────────────
 struct Emitter {
     uint8_t* p;
     void u32(uint32_t v) { std::memcpy(p, &v, 4); p += 4; }
@@ -45,12 +43,12 @@ struct Emitter {
     void str32(unsigned Wt, unsigned Xn, uint32_t imm) { u32(0xB9000000u | ((imm >> 2) << 10) | ((Xn & 31) << 5) | (Wt & 31)); }
 
     void load_gpr(unsigned Xd, unsigned mreg) {
-        if (mreg == 0) { u32(0xAA1F03E0u | (Xd & 31)); return; } // MOV Xd, XZR
-        ldr64(Xd, 19, gpr_off(mreg)); // Lee de x19
+        if (mreg == 0) { u32(0xAA1F03E0u | (Xd & 31)); return; }
+        ldr64(Xd, 19, gpr_off(mreg));
     }
     void store_gpr(unsigned Xs, unsigned mreg) {
         if (mreg == 0) return;
-        str64(Xs, 19, gpr_off(mreg)); // Escribe en x19
+        str64(Xs, 19, gpr_off(mreg));
     }
 
     void add64(unsigned Xd, unsigned Xn, unsigned Xm) { u32(0x8B000000u | ((Xm&31)<<16) | ((Xn&31)<<5) | (Xd&31)); }
@@ -93,11 +91,10 @@ struct Emitter {
     void uxtw(unsigned Xd, unsigned Wn)               { u32(0x2A0003E0u | ((Wn&31)<<16) | (Xd&31)); }
 
     void cmp64(unsigned Xn, unsigned Xm) { u32(0xEB00001Fu | ((Xm&31)<<16) | ((Xn&31)<<5)); }
-    void cset64(unsigned Xd, unsigned cond) { u32(0x9A9F07E0u | ((cond ^ 1) << 12) | (Xd & 31)); }
+    void cset64(unsigned Xd, unsigned cond) { u32(0x9A9F07E0u | (cond << 12) | (Xd & 31)); }
 
     void blr(unsigned Xn) { u32(0xD63F0000u | ((Xn&31) << 5)); }
 
-    // Llamada a función externa segura (x19 es state, x20 es ram)
     void call(void* fn) {
         mov_imm64(16, reinterpret_cast<uintptr_t>(fn));
         blr(16);
@@ -108,8 +105,8 @@ struct Emitter {
         u32(0x910003FDu);        // MOV x29, sp
         u32(0xA9BF53F3u);        // STP x19, x20, [sp, #-16]!
         u32(0xA9BF5BF5u);        // STP x21, x22, [sp, #-16]!
-        mov_reg64(19, 0);        // x19 = state (preservado)
-        mov_reg64(20, 1);        // x20 = ram (preservado)
+        mov_reg64(19, 0);        // x19 = state
+        mov_reg64(20, 1);        // x20 = ram
     }
     void epilogue() {
         u32(0xA8C15BF5u);        // LDP x21, x22, [sp], #16
@@ -134,7 +131,8 @@ static void emit_ill_insn(Emitter& e, uint32_t pc, uint32_t insn) {
     LOGE("Instruccion no traducida @%08X (insn=%08X) -> FORZANDO EXC_RI", pc, insn);
     e.mov_imm32(9, pc); e.str32(9, 19, OFF_COP0 + 14*4); 
     e.ldr32(9, 19, OFF_COP0 + 13*4); e.mov_imm32(10, ~0x7Cu);
-    e.and64(9, 9, 10); e.mov_imm32(10, 10 << 2);
+    e.and64(9, 9, 10); 
+    e.mov_imm32(10, 0x40u); // 0x10 (RI) << 2 = 0x40
     e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 13*4);
     e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 2);
     e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
@@ -215,11 +213,11 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         case FUNC_MTLO: e.load_gpr(9, rs); e.str64(9, 19, OFF_LO); return false;
 
         case FUNC_JR:
-            e.load_gpr(21, rs); // Usar x21 para el destino
+            e.load_gpr(21, rs);
             e.mov_imm32(20, 1);
             return true;
         case FUNC_JALR:
-            e.load_gpr(21, rs); // Usar x21 para el destino
+            e.load_gpr(21, rs);
             e.mov_imm32(9, pc + 8); e.sxtw(9, 9); e.store_gpr(9, rd ? rd : RA);
             e.mov_imm32(20, 1);
             return true;
@@ -228,7 +226,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
             e.mov_imm32(9, pc); e.str32(9, 19, OFF_COP0 + 14*4);
             e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 2);
             e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
-            e.mov_imm32(21, 0x80000180u); // Usar x21
+            e.mov_imm32(21, 0x80000180u);
             e.mov_imm32(20, 1);
             return true;
         }
@@ -248,7 +246,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
             e.load_gpr(9, rs); e.cmp64(9, 31);
             unsigned cond = (rt & 1) ? 0xA : 0xB;
             e.cset64(20, cond);
-            e.mov_imm32(21, pc + 4 + boff); // Usar x21
+            e.mov_imm32(21, pc + 4 + boff);
             if (rt & 0x10) { e.mov_imm32(9, pc + 8); e.sxtw(9, 9); e.store_gpr(9, RA); }
             return true;
         }
@@ -256,10 +254,10 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
     }
 
     case OP_J:
-        e.mov_imm32(21, tgt); e.mov_imm32(20, 1); return true; // Usar x21
+        e.mov_imm32(21, tgt); e.mov_imm32(20, 1); return true;
     case OP_JAL:
         e.mov_imm32(9, pc + 8); e.sxtw(9, 9); e.store_gpr(9, RA);
-        e.mov_imm32(21, tgt); e.mov_imm32(20, 1); return true; // Usar x21
+        e.mov_imm32(21, tgt); e.mov_imm32(20, 1); return true;
 
     case OP_BEQ: case OP_BNE:
     case OP_BLEZ: case OP_BGTZ: {
@@ -275,7 +273,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
             default:      cond = 0x0;
         }
         e.cset64(20, cond);
-        e.mov_imm32(21, pc + 4 + boff); // Usar x21
+        e.mov_imm32(21, pc + 4 + boff);
         return true;
     }
 
@@ -333,7 +331,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
             e.load_gpr(9, rt); e.str32(9, 19, OFF_COP0 + rd*4); return false;
         } else if (rs == 0x10) {
             if (in.r.func == 0x18) { // ERET
-                e.ldr32(21, 19, OFF_COP0 + 14*4); // Cargar EPC en x21
+                e.ldr32(21, 19, OFF_COP0 + 14*4);
                 e.sxtw(21, 21);
                 e.ldr32(9, 19, OFF_COP0 + 12*4);
                 e.mov_imm32(10, ~0x2u); 
@@ -371,11 +369,10 @@ EE_Recompiler::EE_Recompiler(CodeCache& c, EE_State& s, uint8_t* ram)
 
 void EE_Recompiler::invalidate(uint32_t s, uint32_t e) { m_cache.invalidate_range(s, e); }
 
-
 EE_Recompiler::CompiledBlock EE_Recompiler::compile_block(uint32_t guest_pc) {
-    // ESPÍA DE RECOMPILACIÓN
+    // ESPIA DE RECOMPILACIÓN
     static int compile_log_count = 0;
-    if (compile_log_count < 20) {
+    if (compile_log_count < 30) {
         uint32_t first_instr = ee_mem_read32(guest_pc);
         LOGI("JIT Compilando PC: 0x%08X | Instruccion: 0x%08X", guest_pc, first_instr);
         compile_log_count++;
@@ -414,13 +411,8 @@ EE_Recompiler::CompiledBlock EE_Recompiler::compile_block(uint32_t guest_pc) {
     } else {
         e.mov_imm32(10, branch_pc + 8);
         e.cmp64(20, 31);
-        
-        // =====================================================================
-        // ARREGLO DEL CSEL: Rn=10 (fallthrough) si EQ, Rm=21 (target) si NE
-        // 0x9A800000u | (Rm << 16) | (cond << 12) | (Rn << 5) | Rd
-        // =====================================================================
+        // CSEL X9, X10, X21, EQ -> Si x20 == 0, X9 = X10 (no tomado), si no, X9 = X21 (tomado)
         e.u32(0x9A800000u | (21 << 16) | (0x0 << 12) | (10 << 5) | 9);
-        
         e.str32(9, 19, OFF_PC);
     }
 

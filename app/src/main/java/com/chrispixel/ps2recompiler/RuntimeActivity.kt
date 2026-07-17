@@ -49,11 +49,13 @@ class RuntimeActivity : AppCompatActivity() {
     private var gameTitle = ""
     private var isPaused  = false
     private var isLoaded  = false
+    private var loadStarted = false
+    private var surfaceReady = false
     private var hudJob: Job? = null
 
-    // Vistas de depuración creadas por código
-    private lateinit var debugTextView: TextView
-    private lateinit var btnCopyLogs: Button
+    // Vistas de depuracion creadas por codigo
+    private var debugTextView: TextView? = null
+    private var btnCopyLogs: Button? = null
     private val logHistory = StringBuilder()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,9 +75,16 @@ class RuntimeActivity : AppCompatActivity() {
         setupDebugOverlay()
         
         binding.surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(h: SurfaceHolder)  { nativeSurfaceCreated(h.surface); if (!isLoaded) load() }
+            override fun surfaceCreated(h: SurfaceHolder) {
+                nativeSurfaceCreated(h.surface)
+                surfaceReady = true
+                if (!loadStarted) load()
+            }
             override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { nativeSurfaceChanged(h.surface, w, ht) }
-            override fun surfaceDestroyed(h: SurfaceHolder){ nativeSurfaceDestroyed() }
+            override fun surfaceDestroyed(h: SurfaceHolder) {
+                surfaceReady = false
+                nativeSurfaceDestroyed()
+            }
         })
         binding.surfaceView.setOnClickListener { toggleHud() }
         binding.btnBack.setOnClickListener    { togglePause() }
@@ -85,9 +94,10 @@ class RuntimeActivity : AppCompatActivity() {
             hidePauseOv()
             nativeReset()
             isLoaded = false
+            loadStarted = false
             logHistory.clear()
-            load() 
-            isPaused = false 
+            isPaused = false
+            if (surfaceReady) load()
         }
         binding.btnQuit.setOnClickListener    { MaterialAlertDialogBuilder(this)
             .setTitle("¿Salir?").setMessage("Se perderá el progreso no guardado.")
@@ -143,11 +153,19 @@ class RuntimeActivity : AppCompatActivity() {
 
     override fun onResume()  { super.onResume();  if (isLoaded && isPaused) resume() }
     override fun onPause()   { super.onPause();   if (isLoaded && !isPaused) { isPaused = true; nativePause() } }
-    override fun onDestroy() { super.onDestroy(); nativeShutdown() }
+    override fun onDestroy() {
+        isLoaded = false
+        loadStarted = false
+        hudJob?.cancel()
+        try { nativeShutdown() } catch (_: Exception) {}
+        super.onDestroy()
+    }
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() { if (isLoaded) togglePause() else super.onBackPressed() }
 
     private fun load() {
+        if (loadStarted) return
+        loadStarted = true
         binding.layoutLoading.visibility = View.VISIBLE
         binding.tvLoadingStatus.text = getString(R.string.game_loading)
         binding.tvLoadingDetail.text = isoPath.substringAfterLast('/')
@@ -157,11 +175,11 @@ class RuntimeActivity : AppCompatActivity() {
             val biosPath = intent.getStringExtra("bios_path")
             var biosLoaded = false
             if (!biosPath.isNullOrEmpty()) {
-                biosLoaded = nativeLoadBIOS(biosPath)
+                try { biosLoaded = nativeLoadBIOS(biosPath) } catch (_: Exception) {}
             }
             
             // 2. Cargar el juego
-            val ok = nativeLoadISO(isoPath)
+            val ok = try { nativeLoadISO(isoPath) } catch (_: Exception) { false }
             
             withContext(Dispatchers.Main) {
                 if (ok) {
@@ -193,12 +211,12 @@ class RuntimeActivity : AppCompatActivity() {
                 logHistory.append(debugInfo).append("\n----------------\n")
             }
             
-            debugTextView.text = debugInfo
+            debugTextView?.text = debugInfo
             
             if (nativeIsAlertActive()) {
-                debugTextView.setTextColor(Color.RED)
+                debugTextView?.setTextColor(Color.RED)
             } else {
-                debugTextView.setTextColor(Color.GREEN)
+                debugTextView?.setTextColor(Color.GREEN)
             }
         }
     }

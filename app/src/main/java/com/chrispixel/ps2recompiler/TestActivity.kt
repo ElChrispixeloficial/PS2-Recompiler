@@ -16,7 +16,6 @@ class TestActivity : AppCompatActivity() {
     }
 
     private external fun nativeTestInit()
-    private external fun nativeTestSurface(surface: Any)
     private external fun nativeTestMips(): String
     private external fun nativeTestSpu2(): String
     private external fun nativeTestVulkan(): String

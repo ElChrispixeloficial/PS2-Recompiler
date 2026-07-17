@@ -13,11 +13,16 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityOptionsCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.chrispixel.ps2recompiler.databinding.ActivityMainBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.security.MessageDigest
 
 class MainActivity : AppCompatActivity() {
 
@@ -187,33 +192,60 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleIsoUri(uri: Uri) {
-        val path = resolveUri(uri) ?: run {
-            Snackbar.make(binding.root, getString(R.string.error_load_iso), Snackbar.LENGTH_LONG).show()
-            return
+        lifecycleScope.launch {
+            binding.fabAddGame.isEnabled = false
+            try {
+                val path = withContext(Dispatchers.IO) { resolveUri(uri) } ?: run {
+                    Snackbar.make(binding.root, getString(R.string.error_load_iso), Snackbar.LENGTH_LONG).show()
+                    return@launch
+                }
+                val name = withContext(Dispatchers.IO) { displayName(uri) } ?: File(path).nameWithoutExtension
+                val entry = GameEntry(name.take(12).uppercase(), name, path)
+                GameLibrary.add(this@MainActivity, entry)
+                loadLibrary()
+                Snackbar.make(binding.root, "\"${entry.title}\" anadido", Snackbar.LENGTH_SHORT)
+                    .setAction("Jugar") { launchGame(entry) }.show()
+            } catch (e: Exception) {
+                Snackbar.make(binding.root, getString(R.string.error_load_iso), Snackbar.LENGTH_LONG).show()
+            } finally {
+                binding.fabAddGame.isEnabled = true
+            }
         }
-        val name = displayName(uri) ?: File(path).nameWithoutExtension
-        val entry = GameEntry(name.take(12).uppercase(), name, path)
-        GameLibrary.add(this, entry)
-        loadLibrary()
-        Snackbar.make(binding.root, "\"${entry.title}\" añadido", Snackbar.LENGTH_SHORT)
-            .setAction("Jugar") { launchGame(entry) }.show()
     }
 
-    private fun resolveUri(uri: Uri, fileName: String = "game.iso"): String? = when (uri.scheme) {
+    private fun resolveUri(uri: Uri, fileName: String? = null): String? = when (uri.scheme) {
         "file" -> uri.path
         "content" -> try {
-            val f = File(cacheDir, fileName)
-            contentResolver.openInputStream(uri)?.use { i ->
+            val targetName = fileName ?: uniqueFileName(uri)
+            val f = File(cacheDir, targetName)
+            val bytesCopied = contentResolver.openInputStream(uri)?.use { i ->
                 f.outputStream().use { o -> i.copyTo(o) }
             }
+            if (bytesCopied == null || bytesCopied == 0L) {
+                f.delete()
+                return null
+            }
             f.absolutePath
-        } catch (e: Exception) { null }
+        } catch (e: Exception) {
+            File(cacheDir, fileName ?: "game.iso").delete()
+            null
+        }
         else -> null
     }
 
-    private fun displayName(uri: Uri) = contentResolver.query(uri, null, null, null, null)?.use { c ->
-        c.moveToFirst()
-        c.getString(c.getColumnIndex(OpenableColumns.DISPLAY_NAME))
+    private fun uniqueFileName(uri: Uri): String {
+        val hash = MessageDigest.getInstance("SHA-256")
+            .digest(uri.toString().toByteArray())
+            .take(16)
+            .joinToString("") { "%02x".format(it) }
+        return "iso_${hash}.bin"
+    }
+
+    private fun displayName(uri: Uri): String? = contentResolver.query(uri, null, null, null, null)?.use { c ->
+        if (!c.moveToFirst()) return null
+        val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (idx < 0) return null
+        c.getString(idx)
     }
 
     private fun loadLibrary() {
