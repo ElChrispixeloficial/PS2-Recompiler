@@ -1,6 +1,7 @@
 #include "dma_controller.h"
 #include "../gs/gs_core.h"
 #include "../vu/vu_core.h"
+#include "../vu/vif_unpacker.h"
 #include <android/log.h>
 #include <cstring>
 
@@ -11,6 +12,8 @@
 extern uint8_t*  g_ee_ram;
 extern uint32_t  g_ee_ram_size;
 extern GS_Core*  g_gs_ptr;
+extern VU_Core*  g_vu_core_ptr;
+static VIF_Unpacker g_dma_vif1;
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
@@ -73,16 +76,38 @@ void DMA_Controller::route_transfer(DMA_Channel ch, uint32_t addr, uint32_t qwc)
         }
 
         case DMA_CH_VIF1: {
-            LOGI("DMA VIF1 → VU1/XGKICK: %u QWC from 0x%08X", qwc, addr);
-            // VIF1 is typically used for GIF path (XGKICK).
-            // In a real PS2, VIF1 unpacks tags then feeds GIF via XGKICK.
-            // For now, check if the data looks like GIF packets and forward
-            // directly to GS if so; otherwise log and skip.
-            if (g_gs_ptr && qwc > 0) {
-                g_gs_ptr->process_gif((uint32_t*)data_ptr, qwc);
-                LOGI("DMA VIF1 → GS_Core (XGKICK passthrough): %u QWC", qwc);
-            } else if (!g_gs_ptr) {
-                LOGW("DMA VIF1: g_gs_ptr is null, transfer dropped");
+            LOGI("DMA VIF1: %u QWC from 0x%08X", qwc, addr);
+            if (!g_ee_ram || qwc == 0) break;
+            const uint32_t* words = (const uint32_t*)(g_ee_ram + addr);
+            int total_words = qwc * 4;
+            int pos = 0;
+
+            while (pos < total_words) {
+                uint32_t tag = words[pos++];
+                uint32_t cmd = (tag >> 24) & 0xFF;
+                uint32_t nloop = tag & 0x7FFF;
+                int cmd_qwc = (nloop > 0) ? ((total_words - pos) / 4) : 0;
+                if (cmd_qwc > nloop && nloop > 0) cmd_qwc = nloop;
+
+                if (cmd >= 0x60 && cmd <= 0x7F) {
+                    int data_words = cmd_qwc * 4;
+                    if (pos + data_words > total_words) data_words = total_words - pos;
+                    if (g_vu_core_ptr) {
+                        g_dma_vif1.feed_packet(tag, &words[pos], data_words / 4, *g_vu_core_ptr, 1);
+                    }
+                    pos += data_words;
+                } else if (cmd == 0x30 || cmd == 0x31) {
+                    int data_words = cmd_qwc * 4;
+                    if (pos + data_words > total_words) data_words = total_words - pos;
+                    if (g_gs_ptr && data_words > 0) {
+                        g_gs_ptr->process_gif((const uint32_t*)&words[pos], data_words / 4);
+                    }
+                    pos += data_words;
+                } else {
+                    if (g_vu_core_ptr) {
+                        g_dma_vif1.feed_packet(tag, nullptr, 0, *g_vu_core_ptr, 1);
+                    }
+                }
             }
             break;
         }

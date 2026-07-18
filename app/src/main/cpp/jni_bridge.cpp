@@ -37,6 +37,7 @@
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;
 DMA_Controller* g_dma_ptr = nullptr;
+VU_Core* g_vu_core_ptr = nullptr;
 
 static std::unique_ptr<EE_Core>          g_ee;
 static std::unique_ptr<GS_Core>          g_gs;
@@ -111,6 +112,7 @@ static void full_cleanup() {
     }
     g_ee_core_ptr = nullptr;
     g_dma_ptr = nullptr;
+    g_vu_core_ptr = nullptr;
     g_dma.reset(); g_vu.reset(); g_iop.reset(); g_gs.reset(); g_ee.reset();
     g_gs_writes = g_gs_kicks = g_vulkan_draws = g_vulkan_presents = g_ee_iters = 0;
     g_last_gs_reg = g_last_gs_addr = 0;
@@ -313,6 +315,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
     if (!g_vu || !g_dma) { LOGE("[STEP] nativeLoadISO: VU/DMA null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
     g_dma_ptr = g_dma.get();
+    g_vu_core_ptr = g_vu.get();
     LOGI("[STEP] nativeLoadISO: VU_Core + DMA created");
 
     PS2_BIOS::init();

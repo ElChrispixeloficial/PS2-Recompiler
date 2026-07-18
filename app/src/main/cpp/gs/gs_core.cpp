@@ -402,52 +402,102 @@ void GS_Core::execute_bitblt() {
     uint32_t ssay = (s_draw.trxpos[0] >> 16) & 0x3FFF;
     uint32_t dsax = s_draw.trxpos[1] & 0x3FFF;
     uint32_t dsay = (s_draw.trxpos[1] >> 16) & 0x3FFF;
+    uint32_t dir  = s_draw.trxdir & 0x3;
 
     uint32_t rrw = s_draw.trxreg[0] & 0xFFFF;
     uint32_t rrh = s_draw.trxreg[1] & 0xFFFF;
     if (rrw == 0) rrw = 0xFFFF;
     if (rrh == 0) rrh = 0xFFFF;
 
-    if (s_draw.textransfer_size <= 0) return;
+    if (dir == 3) return; // TRXDIR = 3 is undefined
 
-    uint32_t bpp;
-    switch (dpsm) {
-        case 0:  bpp = 32; break;
-        case 1:  bpp = 24; break;
-        case 2:  bpp = 16; break;
-        default: bpp = 32; break;
-    }
+    auto bits_per_pixel = [](uint32_t psm) -> uint32_t {
+        switch (psm) {
+            case 0: return 32;
+            case 1: return 24;
+            case 2: return 16;
+            case 31: return 16;
+            case 42: return 24;
+            default: return 32;
+        }
+    };
 
-    uint32_t pixels_per_word = (bpp == 32) ? 1 : (bpp == 24) ? 1 : 2;
-    uint32_t dst_x = dsax;
-    uint32_t dst_y = dsay;
-    uint32_t words_used = s_draw.textransfer_size / 4;
-    uint32_t src_idx = 0;
+    auto vram_store_32 = [&](uint32_t x, uint32_t y, uint32_t base, uint32_t bw_val, uint32_t val) {
+        uint32_t addr = ((base + y * (bw_val ? bw_val : 1)) * 64 + x) * 4;
+        if (addr + 4 <= sizeof(state.vram))
+            memcpy(state.vram + addr, &val, 4);
+    };
+    auto vram_load_32 = [&](uint32_t x, uint32_t y, uint32_t base, uint32_t bw_val) -> uint32_t {
+        uint32_t addr = ((base + y * (bw_val ? bw_val : 1)) * 64 + x) * 4;
+        uint32_t val = 0;
+        if (addr + 4 <= sizeof(state.vram))
+            memcpy(&val, state.vram + addr, 4);
+        return val;
+    };
+    auto vram_store_16 = [&](uint32_t x, uint32_t y, uint32_t base, uint32_t bw_val, uint16_t val) {
+        uint32_t addr = ((base + y * (bw_val ? bw_val : 1)) * 64 + x) * 2;
+        if (addr + 2 <= sizeof(state.vram))
+            memcpy(state.vram + addr, &val, 2);
+    };
+    auto vram_load_16 = [&](uint32_t x, uint32_t y, uint32_t base, uint32_t bw_val) -> uint16_t {
+        uint32_t addr = ((base + y * (bw_val ? bw_val : 1)) * 64 + x) * 2;
+        uint16_t val = 0;
+        if (addr + 2 <= sizeof(state.vram))
+            memcpy(&val, state.vram + addr, 2);
+        return val;
+    };
 
-    for (uint32_t y = 0; y < rrh; y++) {
-        for (uint32_t x = 0; x < rrw; x += pixels_per_word) {
-            if (src_idx >= words_used) goto done;
-            uint32_t word_val;
-            memcpy(&word_val, s_draw.textransfer + src_idx * 4, 4);
+    uint32_t src_bpp = bits_per_pixel(spsm);
+    uint32_t dst_bpp = bits_per_pixel(dpsm);
 
-            uint32_t px = dst_x + x;
-            uint32_t py = dst_y + y;
-            uint32_t addr = ((dbp + py * (dbw ? dbw : 1)) * 64 + px) * (bpp / 8);
-            if (addr + 4 <= sizeof(state.vram)) {
-                memcpy(state.vram + addr, &word_val, 4);
-            }
-            if (pixels_per_word == 2 && x + 1 < rrw) {
-                uint32_t addr2 = ((dbp + py * (dbw ? dbw : 1)) * 64 + px + 1) * (bpp / 8);
-                if (addr2 + 4 <= sizeof(state.vram)) {
-                    uint32_t px2 = (bpp == 16) ? (word_val >> 16) : word_val;
-                    memcpy(state.vram + addr2, &px2, 4);
+    if (dir == 0 || dir == 1) {
+        if (s_draw.textransfer_size <= 0) return;
+
+        uint32_t src_idx = 0;
+        uint32_t words_used = s_draw.textransfer_size / 4;
+
+        if (dst_bpp == 32) {
+            for (uint32_t y = 0; y < rrh; y++) {
+                for (uint32_t x = 0; x < rrw; x++) {
+                    if (src_idx >= words_used) goto done;
+                    uint32_t word_val;
+                    memcpy(&word_val, s_draw.textransfer + src_idx * 4, 4);
+                    vram_store_32(dsax + x, dsay + y, dbp, dbw, word_val);
+                    src_idx++;
                 }
             }
-            src_idx++;
+        } else if (dst_bpp == 16) {
+            for (uint32_t y = 0; y < rrh; y++) {
+                for (uint32_t x = 0; x < rrw; x += 2) {
+                    if (src_idx >= words_used) goto done;
+                    uint32_t word_val;
+                    memcpy(&word_val, s_draw.textransfer + src_idx * 4, 4);
+                    vram_store_16(dsax + x,     dsay + y, dbp, dbw, (uint16_t)(word_val & 0xFFFF));
+                    if (x + 1 < rrw)
+                        vram_store_16(dsax + x + 1, dsay + y, dbp, dbw, (uint16_t)(word_val >> 16));
+                    src_idx++;
+                }
+            }
         }
-        dst_x = dsax;
-        dst_y++;
+    } else if (dir == 2) {
+        for (uint32_t y = 0; y < rrh; y++) {
+            for (uint32_t x = 0; x < rrw; x++) {
+                uint32_t src_x = ssax + x;
+                uint32_t src_y = ssay + y;
+                uint32_t dst_x = dsax + x;
+                uint32_t dst_y = dsay + y;
+
+                if (src_bpp == 32 && dst_bpp == 32) {
+                    uint32_t val = vram_load_32(src_x, src_y, sbp, sbw);
+                    vram_store_32(dst_x, dst_y, dbp, dbw, val);
+                } else if (src_bpp == 16 && dst_bpp == 16) {
+                    uint16_t val = vram_load_16(src_x, src_y, sbp, sbw);
+                    vram_store_16(dst_x, dst_y, dbp, dbw, val);
+                }
+            }
+        }
     }
+
 done:
     s_draw.textransfer_size = 0;
 }

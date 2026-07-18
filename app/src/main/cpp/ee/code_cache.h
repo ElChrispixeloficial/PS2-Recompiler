@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <new>
+#include <utility>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <android/log.h>

@@ -2,8 +2,8 @@
 // PS2 BIOS HLE (High-Level Emulation) with full 4MB ROM support
 // Supports both HLE boot (direct to game) and LLE boot (BIOS ROM execution)
 #include "bios_native.h"
-#include "ee/ee_core.h"
-#include "iop/iop_core.h"
+#include "../ee/ee_core.h"
+#include "../iop/iop_core.h"
 #include <android/log.h>
 #include <cstring>
 
