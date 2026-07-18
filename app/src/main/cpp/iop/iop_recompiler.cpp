@@ -19,10 +19,11 @@ extern "C" {
 }
 extern uint8_t* g_iop_ram_ptr;
 
-static constexpr uint32_t OFF_GPR = offsetof(IOP_State, gpr);
-static constexpr uint32_t OFF_PC  = offsetof(IOP_State, pc);
-static constexpr uint32_t OFF_HI  = offsetof(IOP_State, hi);
-static constexpr uint32_t OFF_LO  = offsetof(IOP_State, lo);
+static constexpr uint32_t OFF_GPR  = offsetof(IOP_State, gpr);
+static constexpr uint32_t OFF_PC   = offsetof(IOP_State, pc);
+static constexpr uint32_t OFF_HI   = offsetof(IOP_State, hi);
+static constexpr uint32_t OFF_LO   = offsetof(IOP_State, lo);
+static constexpr uint32_t OFF_COP0 = offsetof(IOP_State, cop0);
 static inline uint32_t gpr_off(unsigned r) { return OFF_GPR + r * 4; }
 
 struct E {
@@ -144,17 +145,25 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         }
         case 0x1A: { // DIV (signed)
             e.load_gpr(9,rs); e.load_gpr(10,rt);
+            // If divisor == 0: LO = 0xFFFFFFFF, HI = rs
             e.u32(0x6B1F001Fu); // CMP W10, #0
-            // If divisor != 0: LO = rs/rt, HI = rs%rt
             e.sdiv(11,9,10);
             e.msub(12,11,10,9); // W12 = 9 - 11*10 = remainder
+            // If W10 == 0, select 0xFFFFFFFF for LO and rs for HI
+            e.movi32(13, 0xFFFFFFFF);
+            e.csel(11, 13, 11, 0x0); // If div==0, LO=0xFFFFFFFF, else LO=result
+            e.csel(12, 9, 12, 0x0);  // If div==0, HI=rs, else HI=remainder
             e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
             return false;
         }
         case 0x1B: { // DIVU (unsigned)
             e.load_gpr(9,rs); e.load_gpr(10,rt);
+            e.u32(0x6B1F001Fu); // CMP W10, #0
             e.udiv(11,9,10);
             e.msub(12,11,10,9);
+            e.movi32(13, 0xFFFFFFFF);
+            e.csel(11, 13, 11, 0x0); // If div==0, LO=0xFFFFFFFF
+            e.csel(12, 9, 12, 0x0);  // If div==0, HI=rs
             e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
             return false;
         }
@@ -235,15 +244,27 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         uint32_t sub = (in >> 21) & 0x1F;
         uint32_t rd = (in >> 11) & 0x1F;
         if (sub == 0x00) { // MFC0: rt = COP0[rd]
-            e.ldr32(9, 0, 0x100 + rd * 4); // COP0 offsets from IOP_State start (after gpr[32], hi, lo, pc = 32*4+4+4+4=144=0x90)
+            e.ldr32(9, 0, OFF_COP0 + rd * 4);
             e.store_gpr(9, rt); return false;
         }
         if (sub == 0x04) { // MTC0: COP0[rd] = rt
             e.load_gpr(9, rt);
-            e.str32(9, 0, 0x100 + rd * 4); return false;
+            e.str32(9, 0, OFF_COP0 + rd * 4); return false;
         }
         if (fn == 0x10) { // RFE: Return From Exception
-            // Restore Status from IntMask and interrupt enable
+            // RFE restores the bottom 2 bits (mode) of Status from SR
+            // COP0[12] = SR, COP0[13] = Cause, COP0[14] = EPC
+            e.ldr32(9, 0, OFF_COP0 + 12 * 4);  // Load SR
+            e.ldr32(10, 0, OFF_COP0 + 13 * 4);  // Load Cause
+            // Mode = SR[mode] >> 2, then shift SR mode bits right by 2 (KUp→KUo pattern)
+            // In R3000: SR[1:0] = mode, we shift right by 2 to get previous mode
+            e.ubfx(11, 9, 2, 2);   // W11 = SR.mode_prev (bits 2-3)
+            e.andr(9, 9, 10);       // Clear mode bits from SR (keep others)
+            e.movi32(10, 0x3);
+            e.mvn(10, 10);          // W10 = ~0x3
+            e.andr(9, 9, 10);       // W9 = SR & ~0x3
+            e.orr(9, 9, 11);        // W9 = (SR & ~0x3) | mode_prev
+            e.str32(9, 0, OFF_COP0 + 12 * 4);  // Store back to SR
             return false;
         }
         return false;

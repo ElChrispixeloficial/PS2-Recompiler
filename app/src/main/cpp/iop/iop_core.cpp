@@ -104,6 +104,15 @@ void IOP_Core::run_cycles(int64_t cycles) {
                 cycles_run += 1; 
                 continue;
             }
+
+            // JIT compilation failed — execute single instruction via interpreter to avoid infinite loop
+            LOGE("IOP JIT failed at PC=0x%08X, falling back to interpreter", state.pc);
+            interpret_single_instruction();
+            cycles_run += 1;
+        } else {
+            // No JIT available — use interpreter
+            interpret_single_instruction();
+            cycles_run += 1;
         }
     }
 }

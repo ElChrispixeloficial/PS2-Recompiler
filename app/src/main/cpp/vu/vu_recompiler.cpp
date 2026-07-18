@@ -19,6 +19,16 @@ extern "C" {
     void     ee_mem_write32_wrapper(uint32_t addr, uint32_t val);
 }
 
+extern "C" void vu_clip_helper(VU_State* vu, int fs, int ft) {
+    const float wx = vu->vf[fs].x, wy = vu->vf[fs].y, wz = vu->vf[fs].z, ww = vu->vf[fs].w;
+    const float aw = vu->vf[ft].w;
+    vu->clip = 0;
+    if (wx >  aw) vu->clip |= (1 << 0); else if (wx < -aw) vu->clip |= (1 << 1);
+    if (wy >  aw) vu->clip |= (1 << 2); else if (wy < -aw) vu->clip |= (1 << 3);
+    if (wz >  aw) vu->clip |= (1 << 4); else if (wz < -aw) vu->clip |= (1 << 5);
+    if (ww >  aw) vu->clip |= (1 << 6); else if (ww < -aw) vu->clip |= (1 << 7);
+}
+
 constexpr size_t VU_JIT_CODE_SIZE = 16 * 1024 * 1024;
 static uint8_t* g_vu_jit_code = nullptr;
 static size_t g_vu_jit_offset = 0;
@@ -106,6 +116,10 @@ struct VU_JitEmitter {
     }
     void sub_w(unsigned Wd, unsigned Wn, unsigned Wm) {
         u32(0x4B000000u | ((Wm & 31) << 16) | ((Wn & 31) << 5) | (Wd & 31));
+    }
+    // ADD Xd, Xn, Xm (64-bit)
+    void add_x(unsigned Xd, unsigned Xn, unsigned Xm) {
+        u32(0x8B000000u | ((Xm & 31) << 16) | ((Xn & 31) << 5) | (Xd & 31));
     }
     void add_w_imm(unsigned Wd, unsigned Wn, int32_t imm12) {
         if (imm12 >= 0)
@@ -528,9 +542,11 @@ enum VU_LowerType : uint8_t {
     VU_LOWER_NOP    = 0x3F,
 };
 
-// Helper: load broadcast component from a VF register
-static void emit_broadcast(VU_JitEmitter& e, unsigned Vd, unsigned fs, unsigned bc) {
-    e.dup_4s(Vd, 0, bc); // v0 = broadcast(vf[fs].component[bc])
+// Helper: broadcast component bc from VF[fs] into Vd
+// Assumes VF[fs] is already loaded into vector register Vsrc
+static void emit_broadcast_load_and_dup(VU_JitEmitter& e, unsigned Vd, unsigned fs, unsigned bc) {
+    e.load_vf(Vd, fs);
+    e.dup_4s(Vd, Vd, bc);
 }
 
 uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
@@ -580,10 +596,41 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
         // ── UPPER INSTRUCTION ────────────────────────────────────────────
         switch (up_op) {
         case 0x00: // ADD.xyzw: VF[fd] = VF[fs] + VF[ft]
-        case 0x03 ... 0x06: // ADDx, ADDy, ADDz, ADDw
         {
             e.load_vf(0, fs);
             e.load_vf(1, ft);
+            e.fadd_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x03: // ADDx: VF[fd] = VF[fs] + broadcast(VF[ft].x)
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fadd_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x04: // ADDy: VF[fd] = VF[fs] + broadcast(VF[ft].y)
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fadd_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x05: // ADDz: VF[fd] = VF[fs] + broadcast(VF[ft].z)
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fadd_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x06: // ADDw: VF[fd] = VF[fs] + broadcast(VF[ft].w)
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fadd_v4s(2, 0, 1);
             e.store_vf(2, fd);
             break;
@@ -606,20 +653,78 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(2, fd);
             break;
         }
-        case 0x07 ... 0x0A: // ADDAx, ADDAy, ADDAz, ADDAw: ACC = ACC + VF[ft].xyzw
+        case 0x07: // ADDAx: ACC = ACC + broadcast(VF[ft].x)
         {
-            e.ldr_q(0, 19, VU_ACC_OFF); // load ACC
-            e.load_vf(1, ft);
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
             e.fadd_v4s(2, 0, 1);
-            e.str_q(2, 19, VU_ACC_OFF); // store ACC
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x08: // ADDAy: ACC = ACC + broadcast(VF[ft].y)
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fadd_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x09: // ADDAz: ACC = ACC + broadcast(VF[ft].z)
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fadd_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x0A: // ADDAw: ACC = ACC + broadcast(VF[ft].w)
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
+            e.fadd_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
             e.store_vf(2, fd);
             break;
         }
         case 0x0C: // SUB.xyzw: VF[fd] = VF[fs] - VF[ft]
-        case 0x0F ... 0x12: // SUBx, SUBy, SUBz, SUBw
         {
             e.load_vf(0, fs);
             e.load_vf(1, ft);
+            e.fsub_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x0F: // SUBx
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fsub_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x10: // SUBy
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fsub_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x11: // SUBz
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fsub_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x12: // SUBw
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fsub_v4s(2, 0, 1);
             e.store_vf(2, fd);
             break;
@@ -642,20 +747,78 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(2, fd);
             break;
         }
-        case 0x13 ... 0x16: // SUBAx, SUBAy, SUBAz, SUBAw: ACC = ACC - VF[ft]
+        case 0x13: // SUBAx: ACC = ACC - broadcast(VF[ft].x)
         {
             e.ldr_q(0, 19, VU_ACC_OFF);
-            e.load_vf(1, ft);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fsub_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x14: // SUBAy
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fsub_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x15: // SUBAz
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fsub_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x16: // SUBAw
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fsub_v4s(2, 0, 1);
             e.str_q(2, 19, VU_ACC_OFF);
             e.store_vf(2, fd);
             break;
         }
         case 0x18: // MUL.xyzw: VF[fd] = VF[fs] * VF[ft]
-        case 0x1B ... 0x1E: // MULx, MULy, MULz, MULw
         {
             e.load_vf(0, fs);
             e.load_vf(1, ft);
+            e.fmul_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x1B: // MULx
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fmul_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x1C: // MULy
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fmul_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x1D: // MULz
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fmul_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x1E: // MULw
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fmul_v4s(2, 0, 1);
             e.store_vf(2, fd);
             break;
@@ -678,22 +841,88 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(2, fd);
             break;
         }
-        case 0x1F ... 0x22: // MULA{x,y,z,w}: ACC = VF[fs] * VF[ft]
+        case 0x1F: // MULAx: ACC = VF[fs] * broadcast(VF[ft].x)
         {
             e.load_vf(0, fs);
-            e.load_vf(1, ft);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fmul_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x20: // MULAy
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fmul_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x21: // MULAz
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fmul_v4s(2, 0, 1);
+            e.str_q(2, 19, VU_ACC_OFF);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x22: // MULAw
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fmul_v4s(2, 0, 1);
             e.str_q(2, 19, VU_ACC_OFF);
             e.store_vf(2, fd);
             break;
         }
         case 0x28: // MADD.xyzw: VF[fd] = ACC + VF[fs] * VF[ft]
-        case 0x2B ... 0x2E: // MADDx,y,z,w
         {
             e.ldr_q(0, 19, VU_ACC_OFF);
             e.load_vf(1, fs);
             e.load_vf(2, ft);
-            e.fmla_v4s(0, 1, 2); // ACC = ACC + FS*FT (NEON FMLA: accum += a*b)
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x2B: // MADDx: VF[fd] = ACC + VF[fs] * broadcast(VF[ft].x)
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 0);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x2C: // MADDy
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 1);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x2D: // MADDz
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 2);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x2E: // MADDw
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 3);
+            e.fmla_v4s(0, 1, 2);
             e.str_q(0, 19, VU_ACC_OFF);
             e.store_vf(0, fd);
             break;
@@ -720,23 +949,92 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(0, fd);
             break;
         }
-        case 0x2F ... 0x32: // MADDA{x,y,z,w}: ACC = ACC + VF[fs] * VF[ft]
+        case 0x2F: // MADDAx: ACC = ACC + VF[fs] * broadcast(VF[ft].x)
         {
             e.ldr_q(0, 19, VU_ACC_OFF);
             e.load_vf(1, fs);
-            e.load_vf(2, ft);
+            emit_broadcast_load_and_dup(e, 2, ft, 0);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x30: // MADDAy
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 1);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x31: // MADDAz
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 2);
+            e.fmla_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x32: // MADDAw
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 3);
             e.fmla_v4s(0, 1, 2);
             e.str_q(0, 19, VU_ACC_OFF);
             e.store_vf(0, fd);
             break;
         }
         case 0x34: // MSUB.xyzw: VF[fd] = ACC - VF[fs] * VF[ft]
-        case 0x37 ... 0x3A:
         {
             e.ldr_q(0, 19, VU_ACC_OFF);
             e.load_vf(1, fs);
             e.load_vf(2, ft);
-            e.fmls_v4s(0, 1, 2); // ACC = ACC - FS*FT
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x37: // MSUBx
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 0);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x38: // MSUBy
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 1);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x39: // MSUBz
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 2);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x3A: // MSUBw
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 3);
+            e.fmls_v4s(0, 1, 2);
             e.str_q(0, 19, VU_ACC_OFF);
             e.store_vf(0, fd);
             break;
@@ -763,21 +1061,82 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(0, fd);
             break;
         }
-        case 0x3B ... 0x3E: // MSUBA{x,y,z,w}: ACC = ACC - VF[fs] * VF[ft]
+        case 0x3B: // MSUBAx: ACC = ACC - VF[fs] * broadcast(VF[ft].x)
         {
             e.ldr_q(0, 19, VU_ACC_OFF);
             e.load_vf(1, fs);
-            e.load_vf(2, ft);
+            emit_broadcast_load_and_dup(e, 2, ft, 0);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x3C: // MSUBAy
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 1);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x3D: // MSUBAz
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 2);
+            e.fmls_v4s(0, 1, 2);
+            e.str_q(0, 19, VU_ACC_OFF);
+            e.store_vf(0, fd);
+            break;
+        }
+        case 0x3E: // MSUBAw
+        {
+            e.ldr_q(0, 19, VU_ACC_OFF);
+            e.load_vf(1, fs);
+            emit_broadcast_load_and_dup(e, 2, ft, 3);
             e.fmls_v4s(0, 1, 2);
             e.str_q(0, 19, VU_ACC_OFF);
             e.store_vf(0, fd);
             break;
         }
         case 0x40: // MAX.xyzw: VF[fd] = max(VF[fs], VF[ft])
-        case 0x42 ... 0x45: // MAXx,y,z,w
         {
             e.load_vf(0, fs);
             e.load_vf(1, ft);
+            e.fmax_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x42: // MAXx
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fmax_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x43: // MAXy
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fmax_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x44: // MAXz
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fmax_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x45: // MAXw
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fmax_v4s(2, 0, 1);
             e.store_vf(2, fd);
             break;
@@ -792,10 +1151,41 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             break;
         }
         case 0x48: // MINI.xyzw: VF[fd] = min(VF[fs], VF[ft])
-        case 0x4A ... 0x4D: // MINIx,y,z,w
         {
             e.load_vf(0, fs);
             e.load_vf(1, ft);
+            e.fmin_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x4A: // MINIx
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 0);
+            e.fmin_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x4B: // MINIy
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 1);
+            e.fmin_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x4C: // MINIz
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 2);
+            e.fmin_v4s(2, 0, 1);
+            e.store_vf(2, fd);
+            break;
+        }
+        case 0x4D: // MINIw
+        {
+            e.load_vf(0, fs);
+            emit_broadcast_load_and_dup(e, 1, ft, 3);
             e.fmin_v4s(2, 0, 1);
             e.store_vf(2, fd);
             break;
@@ -822,25 +1212,13 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
         }
         case 0x10: // CLIP: clip test
         {
-            // Call interpreter fallback for clip (complex flag logic)
+            // CLIP: compare VF[fs].xyzw against VF[ft].x (broadcast w)
+            // Set clip flags based on comparison against VF[ft].w repeated
             e.load_vf(0, fs);
             e.load_vf(1, ft);
             e.movi_w(0, fs);
             e.movi_w(1, ft);
-            e.movi64(15, reinterpret_cast<uintptr_t>([](VU_State& vu, int fs, int ft) {
-                // clip implementation
-                const float wx = vu.vf[fs].x, wy = vu.vf[fs].y, wz = vu.vf[fs].z, ww = vu.vf[fs].w;
-                const float ax = vu.vf[ft].x, ay = vu.vf[ft].y, az = vu.vf[ft].z, aw = vu.vf[ft].w;
-                vu.clip = 0;
-                if (wx >  aw) vu.clip |= (1 << 0); else if (wx < -aw) vu.clip |= (1 << 1);
-                if (wy >  aw) vu.clip |= (1 << 2); else if (wy < -aw) vu.clip |= (1 << 3);
-                if (wz >  aw) vu.clip |= (1 << 4); else if (wz < -aw) vu.clip |= (1 << 5);
-                if (ww >  aw) vu.clip |= (1 << 6); else if (ww < -aw) vu.clip |= (1 << 7);
-            }));
-            // For CLIP we need to call a helper with the full VU_State pointer
-            e.movi_w(0, fs);  // reload fs
-            e.movi_w(1, ft);  // reload ft
-            // CLIP is complex - use call_fn approach with reinterpret
+            e.call_fn((void*)vu_clip_helper);
             break;
         }
         case 0x1D: // ABS: VF[fd] = abs(VF[fs]) with sign correction
@@ -882,56 +1260,60 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
 
         // ── LOWER INSTRUCTION ────────────────────────────────────────────
         switch (lo_op) {
-        case 0x00: // LQ: VF[it] = *VU_Data[is + imm]
+        case 0x00: // LQ: VF[it] = *(VU_Data*)(VI[is] + imm*16)
         {
-            e.load_vi(9, lo_fs); // is
-            e.sxtw_x(10, 9);     // sign-extend to 64-bit
-            e.add_w_imm(9, 9, lo_simm * 16); // addr = is + imm*16
-            e.ldr_q(lo_dest, 10, 0); // wait... need addr in Xn
-            // Actually: load is into W9, add imm*16, treat as offset from data mem
-            e.load_vi(9, lo_fs);
-            e.movi_w(10, (uint32_t)(lo_simm * 16));
-            e.add_w(9, 9, 10); // W9 = offset in VU data mem
-            e.ldr_q(lo_dest, 20, 0); // FIXME: need proper offset
-            // Use helper call instead
+            e.load_vi(9, lo_fs);                 // W9 = VI[is]
+            e.movi_w(10, (uint32_t)(lo_simm << 4)); // W10 = imm * 16
+            e.add_w(9, 9, 10);                    // W9 = byte offset (zero-extended in X9)
+            e.add_x(10, 20, 9);                   // X10 = data_mem + offset
+            e.ldr_q(lo_dest, 10, 0);
             break;
         }
-        case 0x01: // SQ: *VU_Data[it + imm] = VF[is]
+        case 0x01: // SQ: *(VU_Data*)(VI[it] + imm*16) = VF[is]
         {
-            // Store VF to VU data memory
+            e.load_vi(9, lo_ft);                    // W9 = VI[it]
+            e.movi_w(10, (uint32_t)(lo_simm << 4)); // W10 = imm * 16
+            e.add_w(9, 9, 10);                       // W9 = byte offset
+            e.add_x(10, 20, 9);                      // X10 = data_mem + offset
+            e.str_q(lo_fs, 10, 0);
             break;
         }
-        case 0x02: // ILW: VI[it] = *(uint32_t*)(VU_Data[is + imm])
+        case 0x02: // ILW: VI[it] = *(uint32_t*)(VU_Data*)(VI[is] + imm*4)
         {
-            e.load_vi(9, lo_fs);
-            e.movi_w(10, (uint32_t)(lo_simm * 4));
-            e.add_w(9, 9, 10);
-            // Load from data mem: addr in W9
-            e.ldr_w(9, 20, 0); // FIXME: need indexed load from data mem
+            e.load_vi(9, lo_fs);                     // W9 = VI[is]
+            e.movi_w(10, (uint32_t)(lo_simm << 2));  // W10 = imm * 4
+            e.add_w(9, 9, 10);                        // W9 = byte offset
+            e.add_x(10, 20, 9);                       // X10 = data_mem + offset
+            e.ldr_w(9, 10, 0);
             e.store_vi(9, lo_ft);
             break;
         }
-        case 0x03: // ISW: *(uint32_t*)(VU_Data[it + imm]) = VI[is]
+        case 0x03: // ISW: *(uint32_t*)(VU_Data*)(VI[it] + imm*4) = VI[is]
         {
-            e.load_vi(9, lo_fs); // value to store
-            e.load_vi(10, lo_ft);
-            e.movi_w(11, (uint32_t)(lo_simm * 4));
-            e.add_w(10, 10, 11);
-            e.str_w(9, 20, 0); // FIXME
+            e.load_vi(9, lo_fs);                     // W9 = VI[is] (value to store)
+            e.load_vi(10, lo_ft);                    // W10 = VI[it]
+            e.movi_w(11, (uint32_t)(lo_simm << 2));  // W11 = imm * 4
+            e.add_w(10, 10, 11);                      // W10 = byte offset
+            e.add_x(11, 20, 10);                      // X11 = data_mem + offset
+            e.str_w(9, 11, 0);
             break;
         }
-        case 0x04: // IADDIU: VI[it] = VI[is] + imm15 (unsigned extend then sign?)
+        case 0x04: // IADDIU: VI[it] = VI[is] + sign_extend_15(imm15)
         {
             e.load_vi(9, lo_fs);
-            e.movi_w(10, (uint32_t)lo_simm);
+            int32_t imm15 = (int32_t)(lo_imm & 0x7FFF);
+            if (imm15 & 0x4000) imm15 |= (int32_t)(~0x7FFF); // sign-extend from 15 bits
+            e.movi_w(10, (uint32_t)imm15);
             e.add_w(9, 9, 10);
             e.store_vi(9, lo_ft);
             break;
         }
-        case 0x05: // ISUBIU: VI[it] = VI[is] - imm15
+        case 0x05: // ISUBIU: VI[it] = VI[is] - sign_extend_15(imm15)
         {
             e.load_vi(9, lo_fs);
-            e.movi_w(10, (uint32_t)lo_simm);
+            int32_t imm15 = (int32_t)(lo_imm & 0x7FFF);
+            if (imm15 & 0x4000) imm15 |= (int32_t)(~0x7FFF);
+            e.movi_w(10, (uint32_t)imm15);
             e.sub_w(9, 9, 10);
             e.store_vi(9, lo_ft);
             break;
@@ -945,59 +1327,80 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
         case 0x07: // MR32: VF[it].xyzw = VF[is].yzwx (rotate components)
         {
             e.load_vf(0, lo_fs);
-            // Rotate: X←Y, Y←Z, Z←W, W←X using INS instructions
-            e.ins_4s(1, 0, 0, 1); // dest[0] = src[1]
-            e.ins_4s(1, 1, 0, 2); // dest[1] = src[2]
-            e.ins_4s(1, 2, 0, 3); // dest[2] = src[3]
-            e.ins_4s(1, 3, 0, 0); // dest[3] = src[0]
+            // Rotate: X←Y, Y←Z, Z←W, W←X
+            // Use lane-by-lane INS to build result in V0 itself
+            // Save original to temp regs first, then rebuild
+            e.ins_4s(0, 0, 0, 1); // V0[0] = V0_old[1] (Y→X)
+            // After this V0 is modified, but we need original Z for position 1
+            // Better approach: load fs, then extract each lane to build result
+            // Actually: INS Vd.T, Vn.S is destructive, so we need a different approach
+            // Load source into V0, build rotated into V1 by inserting lanes from V0
+            // But V1 is uninitialized. Let's use the vector manipulation approach:
+            // 1. Load VF[fs] into V0
+            // 2. UMOV each lane into GPRs
+            // 3. Insert each GPR into the correct lane of V1
+            e.umov_w(9, 0, 1);   // W9 = V0.Y
+            e.umov_w(10, 0, 2);  // W10 = V0.Z
+            e.umov_w(11, 0, 3);  // W11 = V0.W
+            e.umov_w(12, 0, 0);  // W12 = V0.X
+            e.dup_4s(1, 0, 0);   // Initialize V1 from V0.X (just to set it up)
+            e.fmov_vec_scalar(1, 0, 9);  // V1[0] = Y
+            e.fmov_vec_scalar(1, 1, 10); // V1[1] = Z
+            e.fmov_vec_scalar(1, 2, 11); // V1[2] = W
+            e.fmov_vec_scalar(1, 3, 12); // V1[3] = X
             e.store_vf(1, lo_ft);
             break;
         }
-        case 0x08: // LQI: VF[it] = *VU_Data[vi[is]++]
+        case 0x08: // LQI: VF[it] = *(VU_Data*)(VI[is]), VI[is] += 16
         {
-            // Load then increment VI[is]
             e.load_vi(9, lo_fs);
-            e.ldr_q(lo_dest, 20, 0); // FIXME: indexed load
-            e.add_w_imm(9, 9, 16); // increment by 16 bytes
+            e.add_x(10, 20, 9);   // X10 = data_mem + VI[is]
+            e.ldr_q(lo_dest, 10, 0);
+            e.add_w_imm(9, 9, 16); // VI[is] += 16
             e.store_vi(9, lo_fs);
             break;
         }
-        case 0x09: // SQI: *VU_Data[vi[is]++] = VF[it]
+        case 0x09: // SQI: *(VU_Data*)(VI[is]) = VF[is], VI[is] += 16
         {
             e.load_vi(9, lo_fs);
-            e.str_q(lo_dest, 20, 0); // FIXME
-            e.add_w_imm(9, 9, 16);
+            e.add_x(10, 20, 9);   // X10 = data_mem + VI[is]
+            e.str_q(lo_ft, 10, 0);
+            e.add_w_imm(9, 9, 16); // VI[is] += 16
             e.store_vi(9, lo_fs);
             break;
         }
-        case 0x0C: // LQX: VF[it] = *VU_Data[vi[is] + vi[1]]
+        case 0x0C: // LQX: VF[it] = *(VU_Data*)(VI[is] + VI[it])
         {
             e.load_vi(9, lo_fs);
-            e.load_vi(10, 1); // VI[1] = VI1
-            e.add_w(9, 9, 10);
-            e.ldr_q(lo_dest, 20, 0); // FIXME
+            e.load_vi(10, lo_ft); // VI[it]
+            e.add_w(9, 9, 10);    // W9 = byte offset
+            e.add_x(10, 20, 9);   // X10 = data_mem + offset
+            e.ldr_q(lo_dest, 10, 0);
             break;
         }
-        case 0x0D: // SQX: *VU_Data[vi[is] + vi[1]] = VF[it]
+        case 0x0D: // SQX: *(VU_Data*)(VI[is] + VI[it]) = VF[is]
         {
             e.load_vi(9, lo_fs);
-            e.load_vi(10, 1);
-            e.add_w(9, 9, 10);
-            e.str_q(lo_dest, 20, 0); // FIXME
+            e.load_vi(10, lo_ft); // VI[it]
+            e.add_w(9, 9, 10);    // W9 = byte offset
+            e.add_x(10, 20, 9);   // X10 = data_mem + offset
+            e.str_q(lo_ft, 10, 0);
             break;
         }
-        case 0x0E: // ILWR: VI[it] = *(uint32_t*)(VU_Data[vi[is]])
+        case 0x0E: // ILWR: VI[it] = *(uint32_t*)(VU_Data*)(VI[is])
         {
             e.load_vi(9, lo_fs);
-            e.ldr_w(9, 20, 0); // FIXME
+            e.add_x(10, 20, 9);   // X10 = data_mem + VI[is]
+            e.ldr_w(9, 10, 0);
             e.store_vi(9, lo_ft);
             break;
         }
-        case 0x0F: // ISWR: *(uint32_t*)(VU_Data[vi[it]]) = VI[is]
+        case 0x0F: // ISWR: *(uint32_t*)(VU_Data*)(VI[it]) = VI[is]
         {
-            e.load_vi(9, lo_fs);
-            e.load_vi(10, lo_ft);
-            e.str_w(9, 20, 0); // FIXME
+            e.load_vi(9, lo_fs);  // value to store
+            e.load_vi(10, lo_ft); // VI[it] = base
+            e.add_x(11, 20, 10);  // X11 = data_mem + VI[it]
+            e.str_w(9, 11, 0);
             break;
         }
         case 0x10: // RGET: VF[it].x = P (EFU result)
