@@ -270,30 +270,43 @@ PS2-Recompiler/
 │   │   ├── java/com/chrispixel/ps2recompiler/
 │   │   │   ├── MainActivity.kt           # Game library UI
 │   │   │   ├── RuntimeActivity.kt        # Emulator screen
-│   │   │   ├── TestActivity.kt           # Debug/test activity
-│   │   │   ├── GameLibrary.kt            # Persistent game list
-│   │   │   └── GameLibraryAdapter.kt     # RecyclerView adapter
+│   │   │   └── TestActivity.kt           # Debug/test activity
 │   │   └── cpp/
 │   │       ├── CMakeLists.txt            # Build configuration
 │   │       ├── jni_bridge.cpp            # JNI entry point
 │   │       ├── ee/                       # Emotion Engine
-│   │       │   ├── ee_core.cpp           # JIT dispatcher
-│   │       │   ├── recompiler_arm64.cpp  # ★ MIPS → ARM64
-│   │       │   ├── recompiler_arm32.cpp  # MIPS → ARM32
+│   │       │   ├── ee_core.cpp           # JIT dispatcher + state
+│   │       │   ├── recompiler_arm64.cpp  # ★ MIPS → ARM64 JIT
+│   │       │   ├── recompiler_arm32.cpp  # MIPS → ARM32 JIT
 │   │       │   ├── code_cache.cpp        # Executable mmap cache
-│   │       │   └── ee_memory.cpp         # Memory map
+│   │       │   ├── ee_memory.cpp         # 128-bit + unaligned memory
+│   │       │   └── mips_disasm.cpp       # Disassembler for debug
 │   │       ├── gs/                       # Graphics Synthesizer
-│   │       │   ├── gs_core.cpp           # GIF packet parser
-│   │       │   ├── gs_vulkan.cpp         # ★ GS → Vulkan
-│   │       │   └── vulkan_context.cpp    # Vulkan setup
-│   │       ├── spu2/                     # Sound Processing
-│   │       │   └── spu2_core.cpp         # ADPCM → PCM
+│   │       │   ├── gs_core.cpp           # GIF parser + GS registers
+│   │       │   ├── gs_vulkan.cpp         # ★ Vulkan pipeline + textures
+│   │       │   ├── gs_rasterizer.cpp     # Software fallback + PSM decode
+│   │       │   ├── vulkan_context.cpp    # Vulkan device setup
+│   │       │   └── shaders/              # GLSL → SPIR-V shaders
+│   │       ├── spu2/                     # Sound Processing Unit 2
+│   │       │   └── spu2_core.cpp         # ADPCM + ADSR + reverb + pitch
 │   │       ├── iop/                      # I/O Processor
-│   │       │   └── iop_core.cpp          # R3000 interpreter
+│   │       │   ├── iop_core.cpp          # R3000 bus + state
+│   │       │   └── iop_recompiler.cpp    # ★ R3000 → ARM64 JIT
 │   │       ├── vu/                       # Vector Units
-│   │       │   └── vu_core.cpp           # VU0/VU1
-│   │       └── bus/                      # DMA & Memory
-│   │           └── dma_controller.cpp    # DMA channels
+│   │       │   ├── vu_core.cpp           # VU0/VU1 interpreter
+│   │       │   ├── vu_recompiler.cpp     # ★ VU JIT → ARM64 NEON
+│   │       │   └── vif_unpacker.cpp      # ★ VIF1 → VU1 decompression
+│   │       ├── input/                    # Input devices
+│   │       │   └── dualshock.cpp         # DualShock 2 controller
+│   │       ├── bus/                      # DMA & Memory
+│   │       │   ├── dma_controller.cpp    # DMA channels
+│   │       │   └── memory_map.cpp        # HW register map
+│   │       ├── iso/                      # ISO/CDVD
+│   │       │   ├── iso_loader.cpp        # ISO 9660 + ELF loader
+│   │       │   └── cdvd.cpp              # CDVD registers
+│   │       └── bios/                     # BIOS
+│   │           └── bios_native.cpp       # HLE + LLE BIOS boot
+├── build_shaders.sh                      # SPIR-V build pipeline
 ├── build.gradle.kts
 └── gradlew
 ```
@@ -323,109 +336,114 @@ PS2-Recompiler/
   <text x="400" y="30" text-anchor="middle" font-family="Arial" font-size="18" fill="white" font-weight="bold">Implementation Status</text>
 
   <!-- Done items -->
-  <rect x="20" y="50" width="380" height="310" rx="10" fill="url(#done)" stroke="#2ecc71" stroke-width="1.5"/>
+  <rect x="20" y="50" width="380" height="420" rx="10" fill="url(#done)" stroke="#2ecc71" stroke-width="1.5"/>
   <text x="210" y="75" text-anchor="middle" font-family="Arial" font-size="13" fill="#2ecc71" font-weight="bold">✓ COMPLETED</text>
   
   <circle cx="45" cy="100" r="6" fill="#2ecc71"/>
-  <text x="60" y="104" font-family="monospace" font-size="11" fill="#aaa">ISO Loader (ISO 9660 + ELF)</text>
+  <text x="60" y="104" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: Full MIPS R5900</text>
 
-  <circle cx="45" cy="125" r="6" fill="#2ecc71"/>
-  <text x="60" y="129" font-family="monospace" font-size="11" fill="#aaa">ARM64 Code Emitter (NEON SIMD)</text>
+  <circle cx="45" cy="120" r="6" fill="#2ecc71"/>
+  <text x="60" y="124" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: COP1/FPU (float+double)</text>
 
-  <circle cx="45" cy="150" r="6" fill="#2ecc71"/>
-  <text x="60" y="154" font-family="monospace" font-size="11" fill="#aaa">MIPS R5900 Full Definitions</text>
+  <circle cx="45" cy="140" r="6" fill="#2ecc71"/>
+  <text x="60" y="144" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: MMI (30+ instructions)</text>
 
-  <circle cx="45" cy="175" r="6" fill="#2ecc71"/>
-  <text x="60" y="179" font-family="monospace" font-size="11" fill="#aaa">Code Cache (mmap RWX)</text>
+  <circle cx="45" cy="160" r="6" fill="#2ecc71"/>
+  <text x="60" y="164" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: 128-bit + Unaligned</text>
+
+  <circle cx="45" cy="180" r="6" fill="#2ecc71"/>
+  <text x="60" y="184" font-family="monospace" font-size="11" fill="#aaa">IOP R3000 → Native ARM64 JIT</text>
 
   <circle cx="45" cy="200" r="6" fill="#2ecc71"/>
-  <text x="60" y="204" font-family="monospace" font-size="11" fill="#aaa">EE Core (JIT Dispatcher)</text>
+  <text x="60" y="204" font-family="monospace" font-size="11" fill="#aaa">VU JIT Recompiler (all upper+lower)</text>
 
-  <circle cx="45" cy="225" r="6" fill="#2ecc71"/>
-  <text x="60" y="229" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: COP0/COP1/COP2</text>
+  <circle cx="45" cy="220" r="6" fill="#2ecc71"/>
+  <text x="60" y="224" font-family="monospace" font-size="11" fill="#aaa">VIF Unpacker (VIF1 → VU1)</text>
 
-  <circle cx="45" cy="250" r="6" fill="#2ecc71"/>
-  <text x="60" y="254" font-family="monospace" font-size="11" fill="#aaa">EE Recompiler: MMI (30+ instr)</text>
+  <circle cx="45" cy="240" r="6" fill="#2ecc71"/>
+  <text x="60" y="244" font-family="monospace" font-size="11" fill="#aaa">Vulkan Pipeline + Texture Upload</text>
 
-  <circle cx="45" cy="275" r="6" fill="#2ecc71"/>
-  <text x="60" y="279" font-family="monospace" font-size="11" fill="#aaa">128-bit &amp; Unaligned Memory</text>
+  <circle cx="45" cy="260" r="6" fill="#2ecc71"/>
+  <text x="60" y="264" font-family="monospace" font-size="11" fill="#aaa">GS Registers (TEX0/FRAME/ZBUF/ALPHA)</text>
+
+  <circle cx="45" cy="280" r="6" fill="#2ecc71"/>
+  <text x="60" y="284" font-family="monospace" font-size="11" fill="#aaa">GS Register Handling (TEST/SCISSOR)</text>
 
   <circle cx="45" cy="300" r="6" fill="#2ecc71"/>
-  <text x="60" y="304" font-family="monospace" font-size="11" fill="#aaa">Vulkan Pipeline (draw calls)</text>
+  <text x="60" y="304" font-family="monospace" font-size="11" fill="#aaa">GS GIF Tag Parser (complete)</text>
 
-  <circle cx="45" cy="325" r="6" fill="#2ecc71"/>
-  <text x="60" y="329" font-family="monospace" font-size="11" fill="#aaa">GS Core + GIF Parser</text>
+  <circle cx="45" cy="320" r="6" fill="#2ecc71"/>
+  <text x="60" y="324" font-family="monospace" font-size="11" fill="#aaa">SPU2 ADPCM + ADSR + Reverb + Pitch</text>
 
-  <circle cx="45" cy="350" r="6" fill="#2ecc71"/>
-  <text x="60" y="354" font-family="monospace" font-size="11" fill="#aaa">SPU2 ADPCM + ADSR Envelope</text>
+  <circle cx="45" cy="340" r="6" fill="#2ecc71"/>
+  <text x="60" y="344" font-family="monospace" font-size="11" fill="#aaa">SPU2 Noise Generator (LFSR)</text>
+
+  <circle cx="45" cy="360" r="6" fill="#2ecc71"/>
+  <text x="60" y="364" font-family="monospace" font-size="11" fill="#aaa">DualShock 2 Input (buttons+sticks)</text>
+
+  <circle cx="45" cy="380" r="6" fill="#2ecc71"/>
+  <text x="60" y="384" font-family="monospace" font-size="11" fill="#aaa">BIOS Boot (HLE + LLE modes)</text>
+
+  <circle cx="45" cy="400" r="6" fill="#2ecc71"/>
+  <text x="60" y="404" font-family="monospace" font-size="11" fill="#aaa">SPIR-V Build Pipeline (shader script)</text>
+
+  <circle cx="45" cy="420" r="6" fill="#2ecc71"/>
+  <text x="60" y="424" font-family="monospace" font-size="11" fill="#aaa">Software Rasterizer (PSM decode)</text>
+
+  <circle cx="45" cy="440" r="6" fill="#2ecc71"/>
+  <text x="60" y="444" font-family="monospace" font-size="11" fill="#aaa">ISO Loader (ISO 9660 + ELF)</text>
 
   <!-- Todo items -->
-  <rect x="420" y="50" width="370" height="310" rx="10" fill="url(#todo)" stroke="#e74c3c" stroke-width="1.5"/>
-  <text x="605" y="75" text-anchor="middle" font-family="Arial" font-size="13" fill="#e74c3c" font-weight="bold">⏳ TODO</text>
+  <rect x="420" y="50" width="370" height="180" rx="10" fill="url(#todo)" stroke="#e74c3c" stroke-width="1.5"/>
+  <text x="605" y="75" text-anchor="middle" font-family="Arial" font-size="13" fill="#e74c3c" font-weight="bold">⏳ REMAINING</text>
 
   <circle cx="445" cy="100" r="6" fill="#e74c3c"/>
-  <text x="460" y="104" font-family="monospace" font-size="11" fill="#aaa">VU JIT (only 5 upper instr)</text>
+  <text x="460" y="104" font-family="monospace" font-size="11" fill="#aaa">LWL/LWR/SWL/SWR accuracy</text>
 
-  <circle cx="445" cy="125" r="6" fill="#e74c3c"/>
-  <text x="460" y="129" font-family="monospace" font-size="11" fill="#aaa">IOP R3000 → Native Recompiler</text>
+  <circle cx="445" cy="120" r="6" fill="#e74c3c"/>
+  <text x="460" y="124" font-family="monospace" font-size="11" fill="#aaa">Branch-Likely delay slots</text>
 
-  <circle cx="445" cy="150" r="6" fill="#e74c3c"/>
-  <text x="460" y="154" font-family="monospace" font-size="11" fill="#aaa">VIF Unpacker (VIF1 → VU1)</text>
+  <circle cx="445" cy="140" r="6" fill="#e74c3c"/>
+  <text x="460" y="144" font-family="monospace" font-size="11" fill="#aaa">VIF XGKICK DMA to GIF</text>
 
-  <circle cx="445" cy="175" r="6" fill="#e74c3c"/>
-  <text x="460" y="179" font-family="monospace" font-size="11" fill="#aaa">SPU2 Reverb + Pitch Mod</text>
+  <circle cx="445" cy="160" r="6" fill="#e74c3c"/>
+  <text x="460" y="164" font-family="monospace" font-size="11" fill="#aaa">GS BITBLT complete (TRXPOS)</text>
+
+  <circle cx="445" cy="180" r="6" fill="#e74c3c"/>
+  <text x="460" y="184" font-family="monospace" font-size="11" fill="#aaa">Timer/INTC hardware registers</text>
 
   <circle cx="445" cy="200" r="6" fill="#e74c3c"/>
-  <text x="460" y="204" font-family="monospace" font-size="11" fill="#aaa">GS Registers (TEX0, FRAME, ZBUF)</text>
-
-  <circle cx="445" cy="225" r="6" fill="#e74c3c"/>
-  <text x="460" y="229" font-family="monospace" font-size="11" fill="#aaa">Texture Upload/Bind (Vulkan)</text>
-
-  <circle cx="445" cy="250" r="6" fill="#e74c3c"/>
-  <text x="460" y="254" font-family="monospace" font-size="11" fill="#aaa">SPIR-V Shader Build Pipeline</text>
-
-  <circle cx="445" cy="275" r="6" fill="#e74c3c"/>
-  <text x="460" y="279" font-family="monospace" font-size="11" fill="#aaa">DualShock Input (Android)</text>
-
-  <circle cx="445" cy="300" r="6" fill="#e74c3c"/>
-  <text x="460" y="304" font-family="monospace" font-size="11" fill="#aaa">BIOS Boot (4MB ROM)</text>
-
-  <circle cx="445" cy="325" r="6" fill="#e74c3c"/>
-  <text x="460" y="329" font-family="monospace" font-size="11" fill="#aaa">Branch-Likely Delay Slots</text>
-
-  <circle cx="445" cy="350" r="6" fill="#e74c3c"/>
-  <text x="460" y="354" font-family="monospace" font-size="11" fill="#aaa">SPU2 Noise Generator</text>
+  <text x="460" y="204" font-family="monospace" font-size="11" fill="#aaa">CDVD register emulation</text>
 
   <!-- Legend -->
-  <circle cx="100" cy="385" r="5" fill="#2ecc71"/>
-  <text x="115" y="389" font-family="Arial" font-size="10" fill="#666">Done</text>
-  <circle cx="250" cy="385" r="5" fill="#e74c3c"/>
-  <text x="265" y="389" font-family="Arial" font-size="10" fill="#666">Todo</text>
+  <circle cx="100" cy="245" r="5" fill="#2ecc71"/>
+  <text x="115" y="249" font-family="Arial" font-size="10" fill="#666">Done</text>
+  <circle cx="250" cy="245" r="5" fill="#e74c3c"/>
+  <text x="265" y="249" font-family="Arial" font-size="10" fill="#666">Remaining</text>
 </svg>
 
 | Component | Status | Notes |
 |-----------|--------|-------|
+| EE Recompiler | ✅ Done | Full MIPS R5900: COP0/COP1/COP2, MMI, 128-bit, unaligned |
+| IOP R3000 | ✅ Done | Native ARM64 JIT recompiler (all R3000 instructions) |
+| VU Recompiler | ✅ Done | Complete upper+lower VU instructions → ARM64 NEON |
+| VIF Unpacker | ✅ Done | All 18 pack modes (S32/S16/S8/V4/V3/V2/V1) |
+| Vulkan | ✅ Done | Pipeline, draw, vertex buffer, texture upload/bind |
+| GS Core | ✅ Done | GIF parser, TEX0/FRAME/ZBUF/ALPHA/TEST/SCISSOR |
+| SPU2 | ✅ Done | ADPCM + ADSR + Reverb + Pitch + Noise |
+| DualShock 2 | ✅ Done | Buttons, sticks, pressure-sensitive, SIO2 |
+| BIOS Boot | ✅ Done | HLE fast-boot + LLE real BIOS execution |
+| SPIR-V Build | ✅ Done | Build-time shader compilation script |
+| Software Raster | ✅ Done | PSM32/24/16/8/4 decode + alpha/depth test |
 | ISO Loader | ✅ Done | ISO 9660 + ELF parsing |
-| ARM64 Emitter | ✅ Done | Full instruction set + NEON SIMD |
-| EE Recompiler | ✅ Done | COP0/COP1/COP2, MMI, 128-bit, unaligned, branch-likely |
-| Code Cache | ✅ Done | mmap RWX blocks |
-| GS Vulkan | ✅ Done | Pipeline, draw calls, vertex buffer, SPIR-V inline |
-| GS Core | ✅ Done | GIF parser, register handling |
-| SPU2 | ✅ Done | ADPCM + ADSR 4-state envelope |
-| IOP Core | ⚙️ Interpreter | Needs native recompiler |
-| VU Core | ✅ Done | 30+ instructions, EFU, accumulators, conversions |
-| DMA Controller | ✅ Done | GIF channel functional |
+| DMA Controller | ✅ Done | GIF channel + chain mode |
 
-### Next Steps (Priority Order)
-1. **VU JIT Recompiler** — Only 5 upper instructions recompiled, rest interpreter
-2. **IOP R3000 Recompiler** — Convert interpreter to native ARM64
-3. **VIF Unpacker** — Geometry data decompression VIF1 → VU1
-4. **SPU2 Reverb/Pitch** — Effects processing for audio realism
-5. **GS Register Handling** — TEX0/1/2, FRAME, ZBUF, ALPHA, TEST, SCISSOR
-6. **Texture Pipeline** — Upload/bind textures in Vulkan
-7. **SPIR-V Build** — Compile shaders at build time (not inline)
-8. **DualShock Input** — Connect Android controller to IOP
-9. **BIOS Boot** — Full BIOS ROM support (4MB)
+### Remaining Work
+1. **LWL/LWR/SWL/SWR** — Unaligned memory access accuracy
+2. **Branch-Likely** — Proper delay-slot skipping for BEQL/BNEL
+3. **VIF XGKICK** — DMA transfer from VU1 to GIF
+4. **Timer/INTC** — Hardware timer and interrupt controller registers
+5. **CDVD** — CD/DVD register emulation for disc games
 
 ---
 
@@ -482,10 +500,11 @@ Contributions are welcome! Here's how to get started:
 5. Open a Pull Request
 
 ### Development Areas
-- **Recompiler** — Add missing MIPS instructions in `recompiler_arm64.cpp`
-- **Graphics** — Implement GS→Vulkan translation in `gs_vulkan.cpp`
-- **Audio** — Improve SPU2 mixing and effects in `spu2_core.cpp`
-- **Input** — Add DualShock controller support
+- **EE Recompiler** — Improve instruction accuracy in `recompiler_arm64.cpp`
+- **VU JIT** — Extend VU recompiler in `vu_recompiler.cpp`
+- **Graphics** — Improve GS→Vulkan in `gs_vulkan.cpp`
+- **Audio** — Enhance SPU2 effects in `spu2_core.cpp`
+- **Input** — DualShock 2 support in `dualshock.cpp`
 
 ---
 

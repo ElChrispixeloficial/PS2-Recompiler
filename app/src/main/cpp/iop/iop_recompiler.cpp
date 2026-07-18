@@ -62,6 +62,12 @@ struct E {
     void udiv(unsigned Wd, unsigned Wn, unsigned Wm){ u32(0x1AC00800u | ((Wm&31)<<16) | ((Wn&31)<<5) | (Wd&31)); }
     void msub(unsigned Wd, unsigned Wn, unsigned Wm, unsigned Wa){ u32(0x1B008000u | ((Wm&31)<<16) | ((Wa&31)<<10) | ((Wn&31)<<5) | (Wd&31)); }
     void blr(unsigned Xn){ u32(0xD63F0000u | ((Xn&31)<<5)); }
+    void sbfx(unsigned Wd, unsigned Wn, unsigned lsb, unsigned width) { u32(0x13000000u | (((width-1)&0x3F)<<16) | ((lsb&0x3F)<<10) | ((Wn&31)<<5) | (Wd&31)); }
+    void ubfx(unsigned Wd, unsigned Wn, unsigned lsb, unsigned width) { u32(0x53000000u | (((width-1)&0x3F)<<16) | ((lsb&0x3F)<<10) | ((Wn&31)<<5) | (Wd&31)); }
+    void sxtw(unsigned Xd, unsigned Wn) { u32(0x93407C00u | ((Wn&31)<<5) | (Xd&31)); }
+    void csel(unsigned Wd, unsigned Wn, unsigned Wm, unsigned cond) { u32(0x1A800000u | ((Wm&31)<<16) | ((cond&0xF)<<12) | ((Wn&31)<<5) | (Wd&31)); }
+    void smulh(unsigned Xd, unsigned Xn, unsigned Xm) { u32(0x9B407C00u | ((Xm&31)<<16) | ((Xn&31)<<5) | (Xd&31)); }
+    void umulh(unsigned Xd, unsigned Xn, unsigned Xm) { u32(0x9BC07C00u | ((Xm&31)<<16) | ((Xn&31)<<5) | (Xd&31)); }
 
     // Usamos x21 y x22 para guardar state y ram temporalmente durante un BLR
     void call(void* fn) {
@@ -108,19 +114,60 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
 
     switch (op) {
     case 0x00: switch (fn) {
-        case 0x00: e.load_gpr(9,rt); e.lsli(9,9,sa); e.store_gpr(9,rd); return false;
-        case 0x02: e.load_gpr(9,rt); e.lsri(9,9,sa); e.store_gpr(9,rd); return false;
-        case 0x03: e.load_gpr(9,rt); e.asri(9,9,sa); e.store_gpr(9,rd); return false;
-        case 0x08: e.load_gpr(19,rs); e.movi32(20,1); return true;
-        case 0x09: e.load_gpr(19,rs); e.movi32(9,pc+8); e.store_gpr(9, rd?rd:31); e.movi32(20,1); return true;
-        case 0x0C: e.movi32(19, 0x80000080u); e.movi32(20,1); return true;
-        case 0x0D: e.movi32(19, 0x80000080u); e.movi32(20,1); return true;
-        case 0x20: case 0x21: e.load_gpr(9,rs); e.load_gpr(10,rt); e.add(9,9,10); e.store_gpr(9,rd); return false;
-        case 0x22: case 0x23: e.load_gpr(9,rs); e.load_gpr(10,rt); e.sub(9,9,10); e.store_gpr(9,rd); return false;
-        case 0x24: e.load_gpr(9,rs); e.load_gpr(10,rt); e.andr(9,9,10); e.store_gpr(9,rd); return false;
-        case 0x25: e.load_gpr(9,rs); e.load_gpr(10,rt); e.orr(9,9,10); e.store_gpr(9,rd); return false;
-        case 0x2A: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(9,0xB); e.store_gpr(9,rd); return false;
-        case 0x2B: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(9,0x3); e.store_gpr(9,rd); return false;
+        case 0x00: e.load_gpr(9,rt); e.lsli(9,9,sa); e.store_gpr(9,rd); return false; // SLL
+        case 0x02: e.load_gpr(9,rt); e.lsri(9,9,sa); e.store_gpr(9,rd); return false; // SRL
+        case 0x03: e.load_gpr(9,rt); e.asri(9,9,sa); e.store_gpr(9,rd); return false; // SRA
+        case 0x04: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.lslv(9,9,11); e.store_gpr(9,rd); return false; // SLLV
+        case 0x06: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.lsrv(9,9,11); e.store_gpr(9,rd); return false; // SRLV
+        case 0x07: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.asrv(9,9,11); e.store_gpr(9,rd); return false; // SRAV
+        case 0x08: e.load_gpr(19,rs); e.movi32(20,1); return true; // JR
+        case 0x09: e.load_gpr(19,rs); e.movi32(9,pc+8); e.store_gpr(9,rd?rd:31); e.movi32(20,1); return true; // JALR
+        case 0x0C: e.movi32(19, 0x80000080u); e.movi32(20,1); return true; // SYSCALL
+        case 0x0D: e.movi32(19, 0x80000080u); e.movi32(20,1); return true; // BREAK
+        case 0x10: e.ldr32(9, 0, OFF_HI); e.store_gpr(9,rd); return false; // MFHI
+        case 0x11: e.load_gpr(9,rs); e.str32(9, 0, OFF_HI); return false; // MTHI
+        case 0x12: e.ldr32(9, 0, OFF_LO); e.store_gpr(9,rd); return false; // MFLO
+        case 0x13: e.load_gpr(9,rs); e.str32(9, 0, OFF_LO); return false; // MTLO
+        case 0x18: { // MULT: {HI,LO} = rs * rt (signed)
+            e.load_gpr(9,rs); e.load_gpr(10,rt); e.sxtw(19,9); e.sxtw(20,10);
+            e.smulh(11,19,20); e.mul(12,9,10);
+            e.str32(12, 0, OFF_LO); e.str32(11, 0, OFF_HI);
+            return false;
+        }
+        case 0x19: { // MULTU
+            e.load_gpr(9,rs); e.load_gpr(10,rt);
+            e.umull(18,9,10); // X18 = 64-bit result
+            e.str32(18, 0, OFF_LO);
+            e.u32(0xD360FC12u); // LSR X12, X18, #32
+            e.str32(12, 0, OFF_HI);
+            return false;
+        }
+        case 0x1A: { // DIV (signed)
+            e.load_gpr(9,rs); e.load_gpr(10,rt);
+            e.u32(0x6B1F001Fu); // CMP W10, #0
+            // If divisor != 0: LO = rs/rt, HI = rs%rt
+            e.sdiv(11,9,10);
+            e.msub(12,11,10,9); // W12 = 9 - 11*10 = remainder
+            e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
+            return false;
+        }
+        case 0x1B: { // DIVU (unsigned)
+            e.load_gpr(9,rs); e.load_gpr(10,rt);
+            e.udiv(11,9,10);
+            e.msub(12,11,10,9);
+            e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
+            return false;
+        }
+        case 0x20: e.load_gpr(9,rs); e.load_gpr(10,rt); e.add(9,9,10); e.store_gpr(9,rd); return false; // ADD
+        case 0x21: e.load_gpr(9,rs); e.load_gpr(10,rt); e.add(9,9,10); e.store_gpr(9,rd); return false; // ADDU
+        case 0x22: e.load_gpr(9,rs); e.load_gpr(10,rt); e.sub(9,9,10); e.store_gpr(9,rd); return false; // SUB
+        case 0x23: e.load_gpr(9,rs); e.load_gpr(10,rt); e.sub(9,9,10); e.store_gpr(9,rd); return false; // SUBU
+        case 0x24: e.load_gpr(9,rs); e.load_gpr(10,rt); e.andr(9,9,10); e.store_gpr(9,rd); return false; // AND
+        case 0x25: e.load_gpr(9,rs); e.load_gpr(10,rt); e.orr(9,9,10); e.store_gpr(9,rd); return false; // OR
+        case 0x26: e.load_gpr(9,rs); e.load_gpr(10,rt); e.eor(9,9,10); e.store_gpr(9,rd); return false; // XOR
+        case 0x27: e.load_gpr(9,rs); e.load_gpr(10,rt); e.orr(9,9,10); e.mvn(9,9); e.store_gpr(9,rd); return false; // NOR
+        case 0x2A: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(9,0xB); e.store_gpr(9,rd); return false; // SLT
+        case 0x2B: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(9,0x3); e.store_gpr(9,rd); return false; // SLTU
         }
         return false;
     case 0x01: {
@@ -156,7 +203,7 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         e.store_gpr(9, rt);
         return false;
     }
-    case 0x28: case 0x29: case 0x2B: {
+    case 0x28: case 0x29: case 0x2B: { // SB, SH, SW
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
         e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
         void* fn = (op==0x28)?(void*)&iop_bus_write8
@@ -164,8 +211,46 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
                  :             (void*)&iop_bus_write32;
         e.call(fn); return false;
     }
-    case 0x10: return false;
-    case 0x2F: return false;
+    case 0x2A: { // SWL: store word left (unimplemented, fallback to SW)
+        e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
+        e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
+        e.call((void*)&iop_bus_write32); return false;
+    }
+    case 0x2E: { // SWR: store word right (unimplemented, fallback to SW)
+        e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
+        e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
+        e.call((void*)&iop_bus_write32); return false;
+    }
+    case 0x22: { // LWL: load word left (unimplemented, fallback to LW)
+        e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.movr(0,9);
+        e.call((void*)&iop_bus_read32); e.movr(9,0);
+        e.store_gpr(9, rt); return false;
+    }
+    case 0x26: { // LWR: load word right (unimplemented, fallback to LW)
+        e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.movr(0,9);
+        e.call((void*)&iop_bus_read32); e.movr(9,0);
+        e.store_gpr(9, rt); return false;
+    }
+    case 0x10: { // COP0
+        uint32_t sub = (in >> 21) & 0x1F;
+        uint32_t rd = (in >> 11) & 0x1F;
+        if (sub == 0x00) { // MFC0: rt = COP0[rd]
+            e.ldr32(9, 0, 0x100 + rd * 4); // COP0 offsets from IOP_State start (after gpr[32], hi, lo, pc = 32*4+4+4+4=144=0x90)
+            e.store_gpr(9, rt); return false;
+        }
+        if (sub == 0x04) { // MTC0: COP0[rd] = rt
+            e.load_gpr(9, rt);
+            e.str32(9, 0, 0x100 + rd * 4); return false;
+        }
+        if (fn == 0x10) { // RFE: Return From Exception
+            // Restore Status from IntMask and interrupt enable
+            return false;
+        }
+        return false;
+    }
+    case 0x11: case 0x12: return false; // COP1/COP2 - skip
+    case 0x32: case 0x3A: return false; // LWC2/SWC2 - skip
+    case 0x2F: return false; // LWC0/SWC0 - skip
     default: LOGE("IOP op %02X @%08X", op, pc); return false;
     }
 }

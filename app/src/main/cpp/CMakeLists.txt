@@ -8,17 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(
     -Wall -Wextra -Wno-unused-parameter
     -O2
-    -ffast-math          # acceptable for PS2 float semantics
+    -ffast-math
     -fno-exceptions
 )
 
-# ARM64 optimisations (NDK target is aarch64-linux-android)
+# ARM64 optimisations
 if(ANDROID_ABI STREQUAL "arm64-v8a")
     add_compile_options(-march=armv8-a+simd)
-endif()
-
-# ARM32 optimisations (NEON SIMD)
-if(ANDROID_ABI STREQUAL "armeabi-v7a")
 endif()
 
 # ── Source files ──────────────────────────────────────────────────────────────
@@ -50,6 +46,7 @@ set(SOURCES
     # VU (Vector Units 0 & 1)
     vu/vu_core.cpp
     vu/vu_recompiler.cpp
+    vu/vif_unpacker.cpp
 
     # Bus / DMAC
     bus/memory_map.cpp
@@ -58,7 +55,12 @@ set(SOURCES
     # ISO / ELF loader
     iso/iso_loader.cpp
     iso/cdvd.cpp
+
+    # BIOS
     bios/bios_native.cpp
+
+    # Input (DualShock 2)
+    input/dualshock.cpp
 )
 
 # ── Shared library ────────────────────────────────────────────────────────────
@@ -77,6 +79,7 @@ find_library(log-lib      log)
 find_library(android-lib  android)
 find_library(opensl-lib   OpenSLES)
 find_library(vulkan-lib   vulkan)
+find_library(game-lib     game)
 
 target_link_libraries(ps2recomp
     ${log-lib}
@@ -85,17 +88,14 @@ target_link_libraries(ps2recomp
     ${vulkan-lib}
 )
 
-# ── Vulkan header path (NDK r25+) ─────────────────────────────────────────────
-# NDK ships Vulkan headers at: <ndk>/sysroot/usr/include/vulkan/vulkan.h
-# No extra find_package needed for Android NDK r25+.
+# Link game library if available (for controller input)
+if(game-lib)
+    target_link_libraries(ps2recomp ${game-lib})
+endif()
 
 # ── Strip debug info in release ───────────────────────────────────────────────
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set_target_properties(ps2recomp PROPERTIES
         LINK_FLAGS "-Wl,--strip-all"
     )
-endif()
-
-# ARM32 optimisations (NEON SIMD)
-if(ANDROID_ABI STREQUAL "armeabi-v7a")
 endif()
