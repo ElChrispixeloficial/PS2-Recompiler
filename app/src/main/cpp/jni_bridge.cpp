@@ -175,6 +175,24 @@ extern "C" {
 JNIEXPORT jboolean JNICALL
 Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, jobject, jstring jiso_path) {
     const char* path = env->GetStringUTFChars(jiso_path, nullptr);
+    
+    // Validate path before doing anything
+    FILE* test = fopen(path, "rb");
+    if (!test) {
+        LOGE("nativeLoadISO: ISO no accesible: %s", path);
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    fseek(test, 0, SEEK_END);
+    long fsize = ftell(test);
+    fclose(test);
+    if (fsize < 2048) {
+        LOGE("nativeLoadISO: ISO demasiado pequeno o vacio: %s (%ld bytes)", path, fsize);
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    
+    LOGI("nativeLoadISO: Cargando %s (%ld bytes)", path, fsize);
     full_cleanup();
 
     g_ee  = std::make_unique<EE_Core>();
