@@ -13,11 +13,14 @@ constexpr uint32_t GP = 28;
 
 struct EE_State {
     uint64_t gpr_lo[32];
+    uint64_t gpr_hi[32];
     uint64_t hi, lo;
     uint32_t pc;
     uint32_t cop0[32];
+    float    fpu[32];
+    uint32_t fcsr;
     bool halted;
-    bool interrupt_pending; // <--- Asegúrate de que esté aquí
+    bool interrupt_pending;
     bool branch_delay;
     uint32_t branch_target;
 };

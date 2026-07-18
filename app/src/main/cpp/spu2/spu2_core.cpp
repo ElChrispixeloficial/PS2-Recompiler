@@ -119,8 +119,32 @@ void SPU2_Core::mix(int16_t* output, int frames) {
 
 // ─── Procesamiento ADSR simplificado ──────────────────────────────────────────
 void SPU2_Core::process_adsr(SPU2_Voice& voice) {
-    if (voice.adsr_vol < 0x7FFF) {
-        voice.adsr_vol += 0x100;
+    switch (voice.adsr_state) {
+        case 0: // Attack
+            voice.adsr_vol += 0x200;
+            if (voice.adsr_vol >= 0x7FFF) {
+                voice.adsr_vol = 0x7FFF;
+                voice.adsr_state = 1;
+            }
+            break;
+        case 1: // Decay
+            voice.adsr_vol -= 0x100;
+            if (voice.adsr_vol <= 0x3FFF) {
+                voice.adsr_vol = 0x3FFF;
+                voice.adsr_state = 2;
+            }
+            break;
+        case 2: // Sustain
+            voice.adsr_vol -= 0x20;
+            if (voice.adsr_vol < 0) voice.adsr_vol = 0;
+            break;
+        case 3: // Release
+            voice.adsr_vol -= 0x400;
+            if (voice.adsr_vol <= 0) {
+                voice.adsr_vol = 0;
+                voice.key_on = false;
+            }
+            break;
     }
 }
 

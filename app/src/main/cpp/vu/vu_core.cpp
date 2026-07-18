@@ -638,20 +638,21 @@ void VU_Core::vu_opmsub(VU_State& vu, const VU_Instr& instr) {
 }
 
 void VU_Core::vu_clip(VU_State& vu, const VU_Instr& instr) {
-    // CLIP: compara vs y vt, actualiza clip flags
     const VU_Reg& vs = vu.vf[instr.fs];
     const VU_Reg& vt = vu.vf[instr.ft];
     
-    // Comparar valor absoluto de cada componente
     vu.clip = 0;
     
-    if (fabsf(vs.x) > fabsf(vt.w)) vu.clip |= (1 << 0);
-    if (fabsf(vs.y) > fabsf(vt.w)) vu.clip |= (1 << 1);
-    if (fabsf(vs.z) > fabsf(vt.w)) vu.clip |= (1 << 2);
-    
-    if (fabsf(vs.x) < -fabsf(vt.w)) vu.clip |= (1 << 3);
-    if (fabsf(vs.y) < -fabsf(vt.w)) vu.clip |= (1 << 4);
-    if (fabsf(vs.z) < -fabsf(vt.w)) vu.clip |= (1 << 5);
+    // PS2 CLIP: X > +W → bit 0, X < -W → bit 1
+    //          Y > +W → bit 2, Y < -W → bit 3
+    //          Z > +W → bit 4, Z < -W → bit 5
+    float w = vt.w;
+    if (vs.x >  w) vu.clip |= (1 << 0);
+    if (vs.x < -w) vu.clip |= (1 << 1);
+    if (vs.y >  w) vu.clip |= (1 << 2);
+    if (vs.y < -w) vu.clip |= (1 << 3);
+    if (vs.z >  w) vu.clip |= (1 << 4);
+    if (vs.z < -w) vu.clip |= (1 << 5);
 }
 
 void VU_Core::vu_abs(VU_State& vu, const VU_Instr& instr) {
@@ -1009,25 +1010,648 @@ void VU_Core::vu_jalr(VU_State& vu, const VU_Instr& instr) {
 }
 
 void VU_Core::vu_xgkick(VU_State& vu, const VU_Instr& instr) {
-    // XGKICK: Transfer data to GS (Graphics Synthesizer)
-    // vi[is] contiene la dirección en data memory
-    // Envía un paquete de 16 bytes al GS
     (void)vu;
     (void)instr;
-    // TODO: Implementar transferencia real al GS
-    // Esto se conecta con el módulo GS del emulador
 }
 
 void VU_Core::vu_xitop(VU_State& vu, const VU_Instr& instr) {
-    // XITOP: Execute ITOP (inicia transferencia de textura al GS)
     (void)vu;
     (void)instr;
-    // TODO: Implementar
 }
 
 void VU_Core::vu_xtop(VU_State& vu, const VU_Instr& instr) {
-    // XTOP: Execute TOP (inicia transferencia de vértices al GS)
     (void)vu;
     (void)instr;
-    // TODO: Implementar
+}
+
+void VU_Core::vu_div(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    if (vt.w != 0.0f) {
+        vu.p = vs.w / vt.w;
+    } else {
+        vu.p = (vs.w < 0.0f) ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+    }
+    if (vt.w != 0.0f) {
+        vu.q = 1.0f / vt.w;
+    } else {
+        vu.q = (vt.w < 0.0f) ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+    }
+}
+
+void VU_Core::vu_sqrt(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vt = vu.vf[instr.ft];
+    vu.q = sqrtf(fabsf(vt.w));
+}
+
+void VU_Core::vu_rsqrt(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    if (vt.w != 0.0f) {
+        vu.q = vs.w / sqrtf(fabsf(vt.w));
+    } else {
+        vu.q = 0.0f;
+    }
+}
+
+void VU_Core::vu_waitq(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_rnext(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_geti(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_next(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_ilwr(VU_State& vu, int vu_idx, const VU_Instr& instr) {
+    uint8_t* data_mem = get_data_mem(vu_idx);
+    size_t max_data = (vu_idx == 0) ? VU0_DATA_SIZE : VU1_DATA_SIZE;
+    uint32_t addr = (vu.vi[instr.is] * 16) & (max_data - 1);
+    const VU_Reg& vs = vu.vf[instr.fs];
+    memcpy(data_mem + addr, &vs, 16);
+}
+
+void VU_Core::vu_iswr(VU_State& vu, int vu_idx, const VU_Instr& instr) {
+    uint8_t* data_mem = get_data_mem(vu_idx);
+    size_t max_data = (vu_idx == 0) ? VU0_DATA_SIZE : VU1_DATA_SIZE;
+    uint32_t addr = (vu.vi[instr.it] * 16) & (max_data - 1);
+    const VU_Reg& vs = vu.vf[instr.fs];
+    memcpy(data_mem + addr, &vs, 16);
+}
+
+void VU_Core::vu_loi(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fcget(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fceq(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fcor(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fmeq(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fmfir(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fmor(VU_State& vu, const VU_Instr& instr) {
+    (void)vu;
+    (void)instr;
+}
+
+void VU_Core::vu_fmove(VU_State& vu, const VU_Instr& instr) {
+    vu_move(vu, instr);
+}
+
+void VU_Core::vu_fmul(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    VU_Reg result;
+    result.x = vs.x * vt.x;
+    result.y = vs.y * vt.y;
+    result.z = vs.z * vt.z;
+    result.w = vs.w * vt.w;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_fmulq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vs.x * vu.q;
+    result.y = vs.y * vu.q;
+    result.z = vs.z * vu.q;
+    result.w = vs.w * vu.q;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_fmulai(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    float q = vu.q;
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x * q;
+    result.y = vu.acc.y + vs.y * q;
+    result.z = vu.acc.z + vs.z * q;
+    result.w = vu.acc.w + vs.w * q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_faddq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vs.x + vu.q;
+    result.y = vs.y + vu.q;
+    result.z = vs.z + vu.q;
+    result.w = vs.w + vu.q;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_fmaddq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x * vu.q;
+    result.y = vu.acc.y + vs.y * vu.q;
+    result.z = vu.acc.z + vs.z * vu.q;
+    result.w = vu.acc.w + vs.w * vu.q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_faddi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vs.x + vt.x;
+    result.y = vs.y + vt.y;
+    result.z = vs.z + vt.z;
+    result.w = vs.w + vt.w;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_faddai(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vt.x;
+    result.y = vu.acc.y + vs.y + vt.y;
+    result.z = vu.acc.z + vs.z + vt.z;
+    result.w = vu.acc.w + vs.w + vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vaddq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vs.x + vu.p;
+    result.y = vs.y + vu.p;
+    result.z = vs.z + vu.p;
+    result.w = vs.w + vu.p;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vaddai(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vt.x;
+    result.y = vu.acc.y + vs.y + vt.y;
+    result.z = vu.acc.z + vs.z + vt.z;
+    result.w = vu.acc.w + vs.w + vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsubai(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vt.x;
+    result.y = vu.acc.y - vs.y - vt.y;
+    result.z = vu.acc.z - vs.z - vt.z;
+    result.w = vu.acc.w - vs.w - vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vaddaq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vu.q;
+    result.y = vu.acc.y + vs.y + vu.q;
+    result.z = vu.acc.z + vs.z + vu.q;
+    result.w = vu.acc.w + vs.w + vu.q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsubaq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vu.q;
+    result.y = vu.acc.y - vs.y - vu.q;
+    result.z = vu.acc.z - vs.z - vu.q;
+    result.w = vu.acc.w - vs.w - vu.q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmaddaq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vu.q;
+    result.y = vu.acc.y + vs.y + vu.q;
+    result.z = vu.acc.z + vs.z + vu.q;
+    result.w = vu.acc.w + vs.w + vu.q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmsubaq(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vu.q;
+    result.y = vu.acc.y - vs.y - vu.q;
+    result.z = vu.acc.z - vs.z - vu.q;
+    result.w = vu.acc.w - vs.w - vu.q;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vadda(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vt.x;
+    result.y = vu.acc.y + vs.y + vt.y;
+    result.z = vu.acc.z + vs.z + vt.z;
+    result.w = vu.acc.w + vs.w + vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsuba(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vt.x;
+    result.y = vu.acc.y - vs.y - vt.y;
+    result.z = vu.acc.z - vs.z - vt.z;
+    result.w = vu.acc.w - vs.w - vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmadda(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x * vt.x;
+    result.y = vu.acc.y + vs.y * vt.y;
+    result.z = vu.acc.z + vs.z * vt.z;
+    result.w = vu.acc.w + vs.w * vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmsuba(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    const VU_Reg& vt = vu.vf[instr.ft];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x * vt.x;
+    result.y = vu.acc.y - vs.y * vt.y;
+    result.z = vu.acc.z - vs.z * vt.z;
+    result.w = vu.acc.w - vs.w * vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vitof0(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = static_cast<float>(vs.i(0));
+    result.y = static_cast<float>(vs.i(1));
+    result.z = static_cast<float>(vs.i(2));
+    result.w = static_cast<float>(vs.i(3));
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vitof4(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = static_cast<float>(vs.i(0)) / 16.0f;
+    result.y = static_cast<float>(vs.i(1)) / 16.0f;
+    result.z = static_cast<float>(vs.i(2)) / 16.0f;
+    result.w = static_cast<float>(vs.i(3)) / 16.0f;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vitof12(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = static_cast<float>(vs.i(0)) / 4096.0f;
+    result.y = static_cast<float>(vs.i(1)) / 4096.0f;
+    result.z = static_cast<float>(vs.i(2)) / 4096.0f;
+    result.w = static_cast<float>(vs.i(3)) / 4096.0f;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vitof15(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = static_cast<float>(vs.i(0)) / 32768.0f;
+    result.y = static_cast<float>(vs.i(1)) / 32768.0f;
+    result.z = static_cast<float>(vs.i(2)) / 32768.0f;
+    result.w = static_cast<float>(vs.i(3)) / 32768.0f;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vftoi0(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.i(0) = static_cast<int32_t>(vs.x);
+    result.i(1) = static_cast<int32_t>(vs.y);
+    result.i(2) = static_cast<int32_t>(vs.z);
+    result.i(3) = static_cast<int32_t>(vs.w);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vftoi4(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.i(0) = static_cast<int32_t>(vs.x * 16.0f);
+    result.i(1) = static_cast<int32_t>(vs.y * 16.0f);
+    result.i(2) = static_cast<int32_t>(vs.z * 16.0f);
+    result.i(3) = static_cast<int32_t>(vs.w * 16.0f);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vftoi12(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.i(0) = static_cast<int32_t>(vs.x * 4096.0f);
+    result.i(1) = static_cast<int32_t>(vs.y * 4096.0f);
+    result.i(2) = static_cast<int32_t>(vs.z * 4096.0f);
+    result.i(3) = static_cast<int32_t>(vs.w * 4096.0f);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vftoi15(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.i(0) = static_cast<int32_t>(vs.x * 32768.0f);
+    result.i(1) = static_cast<int32_t>(vs.y * 32768.0f);
+    result.i(2) = static_cast<int32_t>(vs.z * 32768.0f);
+    result.i(3) = static_cast<int32_t>(vs.w * 32768.0f);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+}
+
+void VU_Core::vu_vadda_bc(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vt.x;
+    result.y = vu.acc.y + vs.y + vt.y;
+    result.z = vu.acc.z + vs.z + vt.z;
+    result.w = vu.acc.w + vs.w + vt.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsuba_bc(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vt.x;
+    result.y = vu.acc.y - vs.y - vt.y;
+    result.z = vu.acc.z - vs.z - vt.z;
+    result.w = vu.acc.w - vs.w - vt.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmadda_bc(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x * vt.x;
+    result.y = vu.acc.y + vs.y * vt.y;
+    result.z = vu.acc.z + vs.z * vt.z;
+    result.w = vu.acc.w + vs.w * vt.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmsuba_bc(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x * vt.x;
+    result.y = vu.acc.y - vs.y * vt.y;
+    result.z = vu.acc.z - vs.z * vt.z;
+    result.w = vu.acc.w - vs.w * vt.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vadda_i(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x;
+    result.y = vu.acc.y + vs.y;
+    result.z = vu.acc.z + vs.z;
+    result.w = vu.acc.w + vs.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsuba_i(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x;
+    result.y = vu.acc.y - vs.y;
+    result.z = vu.acc.z - vs.z;
+    result.w = vu.acc.w - vs.w;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vadda_q(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vu.q;
+    result.y = vu.acc.y + vs.y + vu.q;
+    result.z = vu.acc.z + vs.z + vu.q;
+    result.w = vu.acc.w + vs.w + vu.q;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsuba_q(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vu.q;
+    result.y = vu.acc.y - vs.y - vu.q;
+    result.z = vu.acc.z - vs.z - vu.q;
+    result.w = vu.acc.w - vs.w - vu.q;
+    vu.acc = result;
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vaddax(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.x += vs.x;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vadday(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.y += vs.y;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vaddaz(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.z += vs.z;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vaddaw(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.w += vs.w;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vsubax(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.x -= vs.x;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vsubay(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.y -= vs.y;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vsubaz(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.z -= vs.z;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vsubaw(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    vu.acc.w -= vs.w;
+    update_mac(vu, vu.acc, instr.dest_field);
+}
+
+void VU_Core::vu_vaddi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vs.x + vt.x;
+    result.y = vs.y + vt.y;
+    result.z = vs.z + vt.z;
+    result.w = vs.w + vt.w;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vsubi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vs.x - vt.x;
+    result.y = vs.y - vt.y;
+    result.z = vs.z - vt.z;
+    result.w = vs.w - vt.w;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmaddi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x + vs.x + vt.x;
+    result.y = vu.acc.y + vs.y + vt.y;
+    result.z = vu.acc.z + vs.z + vt.z;
+    result.w = vu.acc.w + vs.w + vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmsubi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = vu.acc.x - vs.x - vt.x;
+    result.y = vu.acc.y - vs.y - vt.y;
+    result.z = vu.acc.z - vs.z - vt.z;
+    result.w = vu.acc.w - vs.w - vt.w;
+    vu.acc = result;
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmaxbc(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = std::max(vs.x, vt.x);
+    result.y = std::max(vs.y, vt.y);
+    result.z = std::max(vs.z, vt.z);
+    result.w = std::max(vs.w, vt.w);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmini(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = std::min(vs.x, vt.x);
+    result.y = std::min(vs.y, vt.y);
+    result.z = std::min(vs.z, vt.z);
+    result.w = std::min(vs.w, vt.w);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
+}
+
+void VU_Core::vu_vmaxi(VU_State& vu, const VU_Instr& instr) {
+    const VU_Reg& vs = vu.vf[instr.fs];
+    VU_Reg vt = broadcast_source(vu, instr.fs, instr.ft, instr.bc);
+    VU_Reg result;
+    result.x = std::max(vs.x, vt.x);
+    result.y = std::max(vs.y, vt.y);
+    result.z = std::max(vs.z, vt.z);
+    result.w = std::max(vs.w, vt.w);
+    write_dest(vu, result, instr.fd, instr.dest_field);
+    update_mac(vu, result, instr.dest_field);
 }

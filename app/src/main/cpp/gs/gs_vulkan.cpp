@@ -20,6 +20,151 @@ static uint32_t find_mem_type(VkPhysicalDevice d, uint32_t f, VkMemoryPropertyFl
     return 0;
 }
 
+VkShaderModule GS_Vulkan::create_shader_module(const uint32_t* code, size_t size_bytes) {
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = size_bytes;
+    ci.pCode = code;
+    VkShaderModule mod;
+    if (vkCreateShaderModule(m_device, &ci, nullptr, &mod) != VK_SUCCESS) {
+        LOGE("Failed to create shader module");
+        return VK_NULL_HANDLE;
+    }
+    return mod;
+}
+
+uint32_t GS_Vulkan::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props) {
+    return find_mem_type(m_phys_dev, type_filter, props);
+}
+
+static const uint32_t ps2_vert_spv[] = {
+    0x07230203, 0x00010000, 0x00080001, 0x0000002E,
+    0x00000017, 0x00020011, 0x00000001, 0x0006000B,
+    0x00000009, 0x4C534C47, 0x00000004, 0x00000004,
+    0x00000009, 0x00000000, 0x0000000B, 0x00000013,
+    0x00000001, 0x0000000E, 0x00000012, 0x00000005,
+    0x00000005, 0x00000009, 0x00000000, 0x00050051,
+    0x00000009, 0x00000004, 0x00000003, 0x00000001,
+    0x00000000, 0x00050051, 0x00000009, 0x00000005,
+    0x00000003, 0x00000001, 0x00000001, 0x00050051,
+    0x00000009, 0x00000006, 0x00000003, 0x00000001,
+    0x00000002, 0x00050051, 0x00000009, 0x00000008,
+    0x00000003, 0x00000001, 0x00000003, 0x00030047,
+    0x00000009, 0x00000002, 0x00000001, 0x00050048,
+    0x00000009, 0x00000000, 0x00000004, 0x00000002,
+    0x00000001, 0x00050048, 0x00000009, 0x00000001,
+    0x00000005, 0x00000003, 0x00000002, 0x00050048,
+    0x00000009, 0x00000002, 0x00000006, 0x00000003,
+    0x00000004, 0x00030047, 0x00000009, 0x00000001,
+    0x00000003, 0x00020044, 0x0000000B, 0x00000001,
+    0x00000004, 0x00020044, 0x0000000B, 0x00000001,
+    0x00000008, 0x00010044, 0x0000000B, 0x00000002,
+    0x00050048, 0x00000009, 0x00000003, 0x00000007,
+    0x00000001, 0x00000000, 0x00050048, 0x00000009,
+    0x00000004, 0x00000008, 0x00000000, 0x00000002,
+    0x00030047, 0x00000009, 0x00000002, 0x00000001,
+    0x00040047, 0x0000000B, 0x0000000B, 0x00000000,
+    0x00050044, 0x0000000B, 0x00000001, 0x00000012,
+    0x00000000, 0x00020044, 0x0000000B, 0x00000002,
+    0x00000004, 0x00050048, 0x00000009, 0x00000006,
+    0x00000006, 0x00000003, 0x00000002, 0x00020048,
+    0x00000009, 0x00000006, 0x00000007, 0x00040047,
+    0x0000000B, 0x00000009, 0x00000001, 0x00050048,
+    0x00000009, 0x00000007, 0x00000008, 0x00000007,
+    0x00000001, 0x00040047, 0x0000000B, 0x0000000E,
+    0x00000000, 0x00050044, 0x0000000B, 0x00000001,
+    0x00000017, 0x00000000, 0x00020044, 0x0000000B,
+    0x00000002, 0x00000008, 0x00050048, 0x00000009,
+    0x00000008, 0x00000006, 0x00000003, 0x00000004,
+    0x00020048, 0x00000009, 0x00000008, 0x00000007,
+    0x00040047, 0x0000000B, 0x00000013, 0x00000002,
+    0x00020044, 0x0000000B, 0x00000001, 0x0000001E,
+    0x00050048, 0x00000009, 0x00000009, 0x00000006,
+    0x00000003, 0x00000005, 0x00020048, 0x00000009,
+    0x00000009, 0x00000007, 0x00040047, 0x0000000B,
+    0x00000018, 0x00000000, 0x00050048, 0x00000009,
+    0x0000000A, 0x00000008, 0x00000000, 0x00000002,
+    0x00030047, 0x00000009, 0x00000002, 0x00000005,
+    0x00040047, 0x0000000B, 0x0000001D, 0x00000001,
+    0x00050048, 0x00000009, 0x0000000B, 0x00000009,
+    0x00000003, 0x00000006, 0x00020048, 0x00000009,
+    0x0000000B, 0x00000007, 0x00040047, 0x0000000B,
+    0x00000023, 0x00000003, 0x00050044, 0x0000000B,
+    0x00000001, 0x00000029, 0x00000000, 0x00020044,
+    0x0000000B, 0x00000002, 0x00000006, 0x00050048,
+    0x00000009, 0x0000000C, 0x00000006, 0x00000003,
+    0x00000007, 0x00020048, 0x00000009, 0x0000000C,
+    0x00000007, 0x00040047, 0x0000000B, 0x0000002E,
+    0x00000001, 0x00050048, 0x00000009, 0x0000000D,
+    0x00000008, 0x00000000, 0x00000002, 0x00030047,
+    0x00000009, 0x00000002, 0x00000007, 0x00040047,
+    0x0000000B, 0x0000002F, 0x00000002, 0x0004003D,
+    0x00000009, 0x00000004, 0x00000004, 0x00050041,
+    0x0000000B, 0x0000000D, 0x00000004, 0x00000001,
+    0x00000002, 0x0004003D, 0x00000009, 0x00000005,
+    0x00000005, 0x00050041, 0x0000000B, 0x0000000E,
+    0x00000005, 0x00000001, 0x00000001, 0x00050041,
+    0x0000000B, 0x00000013, 0x0000000D, 0x00000002,
+    0x00000003, 0x0004003D, 0x00000009, 0x00000006,
+    0x00000006, 0x00050041, 0x0000000B, 0x00000018,
+    0x00000006, 0x00000001, 0x00000004, 0x0003003E,
+    0x00000009, 0x00000003, 0x0000000E, 0x0004003D,
+    0x00000009, 0x00000008, 0x00000008, 0x00050041,
+    0x0000000B, 0x0000001D, 0x00000008, 0x00000001,
+    0x00000005, 0x0004003D, 0x00000009, 0x00000009,
+    0x00000009, 0x00050041, 0x0000000B, 0x00000023,
+    0x00000009, 0x00000001, 0x00000002, 0x0004003D,
+    0x00000009, 0x0000000A, 0x0000000A, 0x00050041,
+    0x0000000B, 0x0000002E, 0x0000000A, 0x00000001,
+    0x00000004, 0x00050041, 0x0000000B, 0x0000002F,
+    0x0000000A, 0x00000001, 0x00000003, 0x0003003E,
+    0x00000009, 0x0000000B, 0x0000001D, 0x000100FD,
+    0x00010038
+};
+
+static const uint32_t ps2_frag_spv[] = {
+    0x07230203, 0x00010000, 0x00080001, 0x0000001C,
+    0x00000017, 0x00020011, 0x00000001, 0x0006000B,
+    0x00000009, 0x4C534C47, 0x00000004, 0x00000004,
+    0x00000009, 0x00000000, 0x0000000B, 0x00000013,
+    0x00000001, 0x0000000E, 0x00000012, 0x00000005,
+    0x00000005, 0x00000009, 0x00000000, 0x00050051,
+    0x00000009, 0x00000004, 0x00000003, 0x00000001,
+    0x00000000, 0x00050051, 0x00000009, 0x00000005,
+    0x00000003, 0x00000001, 0x00000001, 0x00030047,
+    0x00000009, 0x00000002, 0x00000001, 0x00040047,
+    0x00000009, 0x00000004, 0x00000001, 0x00040047,
+    0x00000009, 0x00000005, 0x00000000, 0x00020044,
+    0x0000000B, 0x00000001, 0x00000004, 0x00020044,
+    0x0000000B, 0x00000001, 0x00000008, 0x00010044,
+    0x0000000B, 0x00000002, 0x00050044, 0x0000000B,
+    0x00000001, 0x00000012, 0x00000000, 0x00020044,
+    0x0000000B, 0x00000002, 0x00000004, 0x00040047,
+    0x0000000B, 0x0000000B, 0x00000000, 0x00050048,
+    0x00000009, 0x00000004, 0x00000006, 0x00000003,
+    0x00000002, 0x00020048, 0x00000009, 0x00000004,
+    0x00000007, 0x00040047, 0x00000009, 0x00000008,
+    0x00000000, 0x00050048, 0x00000009, 0x00000004,
+    0x00000009, 0x00000003, 0x00000004, 0x00020048,
+    0x00000009, 0x00000004, 0x0000000A, 0x00040047,
+    0x00000009, 0x0000000D, 0x00000001, 0x00020044,
+    0x0000000B, 0x00000001, 0x00000017, 0x00050048,
+    0x00000009, 0x00000005, 0x0000000B, 0x00000003,
+    0x00000005, 0x00020048, 0x00000009, 0x00000005,
+    0x0000000C, 0x00040047, 0x0000000B, 0x0000001C,
+    0x00000000, 0x0004003D, 0x00000009, 0x00000004,
+    0x00000004, 0x0004003D, 0x00000009, 0x00000005,
+    0x00000005, 0x00050041, 0x0000000B, 0x0000000B,
+    0x00000004, 0x00000001, 0x00000002, 0x00050041,
+    0x0000000B, 0x0000000D, 0x0000000B, 0x00000002,
+    0x00000003, 0x0004003D, 0x00000009, 0x00000008,
+    0x00000008, 0x00050085, 0x00000009, 0x00000008,
+    0x00000005, 0x00000004, 0x00050041, 0x0000000B,
+    0x0000001C, 0x00000008, 0x00000001, 0x00000001,
+    0x0003003E, 0x00000009, 0x00000006, 0x0000000D,
+    0x000100FD, 0x00010038
+};
+
 bool GS_Vulkan::init(ANativeWindow* window) {
     LOGI("Init Vulkan...");
     VkApplicationInfo ai{}; ai.sType=VK_STRUCTURE_TYPE_APPLICATION_INFO; ai.pApplicationName="PR2"; ai.apiVersion=VK_API_VERSION_1_1;
@@ -48,20 +193,116 @@ bool GS_Vulkan::init(ANativeWindow* window) {
     VkAttachmentDescription ad{}; ad.format=VK_FORMAT_B8G8R8A8_UNORM; ad.samples=VK_SAMPLE_COUNT_1_BIT; ad.loadOp=VK_ATTACHMENT_LOAD_OP_CLEAR; ad.storeOp=VK_ATTACHMENT_STORE_OP_STORE; ad.finalLayout=VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     VkAttachmentReference ar{}; ar.attachment=0; ar.layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     VkSubpassDescription sp{}; sp.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS; sp.colorAttachmentCount=1; sp.pColorAttachments=&ar;
-    VkRenderPassCreateInfo rp{}; rp.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO; rp.attachmentCount=1; rp.pAttachments=&ad; rp.subpassCount=1; rp.pSubpasses=&sp;
+    VkSubpassDependency dep{}; dep.srcSubpass=VK_SUBPASS_EXTERNAL; dep.dstSubpass=0; dep.srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; dep.dstStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT; dep.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    VkRenderPassCreateInfo rp{}; rp.sType=VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO; rp.attachmentCount=1; rp.pAttachments=&ad; rp.subpassCount=1; rp.pSubpasses=&sp; rp.dependencyCount=1; rp.pDependencies=&dep;
     VK_CHECK(vkCreateRenderPass(m_device,&rp,nullptr,&m_render_pass));
     m_framebuffers.resize(ic);
     for(uint32_t i=0;i<ic;i++){VkFramebufferCreateInfo fi{}; fi.sType=VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO; fi.renderPass=m_render_pass; fi.attachmentCount=1; fi.pAttachments=&m_sc_views[i]; fi.width=m_sc_extent.width; fi.height=m_sc_extent.height; fi.layers=1; VK_CHECK(vkCreateFramebuffer(m_device,&fi,nullptr,&m_framebuffers[i]));}
-    VkCommandPoolCreateInfo cp{}; cp.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; VK_CHECK(vkCreateCommandPool(m_device,&cp,nullptr,&m_cmd_pool));
+    VkCommandPoolCreateInfo cp{}; cp.sType=VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO; cp.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT; VK_CHECK(vkCreateCommandPool(m_device,&cp,nullptr,&m_cmd_pool));
     m_cmd_bufs.resize(ic); VkCommandBufferAllocateInfo ca{}; ca.sType=VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO; ca.commandPool=m_cmd_pool; ca.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY; ca.commandBufferCount=ic; VK_CHECK(vkAllocateCommandBuffers(m_device,&ca,m_cmd_bufs.data()));
     VkSemaphoreCreateInfo sc{}; sc.sType=VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO; VK_CHECK(vkCreateSemaphore(m_device,&sc,nullptr,&m_img_available)); VK_CHECK(vkCreateSemaphore(m_device,&sc,nullptr,&m_render_done));
     VkFenceCreateInfo fc{}; fc.sType=VK_STRUCTURE_TYPE_FENCE_CREATE_INFO; fc.flags=VK_FENCE_CREATE_SIGNALED_BIT; VK_CHECK(vkCreateFence(m_device,&fc,nullptr,&m_in_flight));
+    create_pipeline();
+    create_vertex_buffer(1024 * 1024);
     m_ready=true; LOGI("Vulkan OK"); return true;
+}
+
+bool GS_Vulkan::create_pipeline() {
+    VkShaderModule vert_mod = create_shader_module(ps2_vert_spv, sizeof(ps2_vert_spv));
+    VkShaderModule frag_mod = create_shader_module(ps2_frag_spv, sizeof(ps2_frag_spv));
+    if (!vert_mod || !frag_mod) return false;
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert_mod;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag_mod;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bind{};
+    bind.binding = 0;
+    bind.stride = sizeof(PS2_Vertex);
+    bind.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrs[3]{};
+    attrs[0] = {0, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(PS2_Vertex, x)};
+    attrs[1] = {1, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(PS2_Vertex, r)};
+    attrs[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(PS2_Vertex, u)};
+
+    VkPipelineVertexInputStateCreateInfo vi{}; vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &bind;
+    vi.vertexAttributeDescriptionCount = 3; vi.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{}; ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport vp{}; vp.width = (float)m_sc_extent.width; vp.height = (float)m_sc_extent.height; vp.maxDepth = 1.0f;
+    VkRect2D scissor{}; scissor.extent = m_sc_extent;
+
+    VkPipelineViewportStateCreateInfo vs{}; vs.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vs.viewportCount = 1; vs.pViewports = &vp; vs.scissorCount = 1; vs.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rs{}; rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL; rs.lineWidth = 1.0f; rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    VkPipelineMultisampleStateCreateInfo ms{}; ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState cba{}; cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo cb{}; cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1; cb.pAttachments = &cba;
+
+    VkPushConstantRange pcr{}; pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; pcr.size = 16;
+
+    VkPipelineLayoutCreateInfo plci{}; plci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.pushConstantRangeCount = 1; plci.pPushConstantRanges = &pcr;
+    VK_CHECK(vkCreatePipelineLayout(m_device, &plci, nullptr, &m_pipeline_layout));
+
+    VkGraphicsPipelineCreateInfo pci{}; pci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pci.stageCount = 2; pci.pStages = stages;
+    pci.pVertexInputState = &vi; pci.pInputAssemblyState = &ia;
+    pci.pViewportState = &vs; pci.pRasterizationState = &rs;
+    pci.pMultisampleState = &ms; pci.pColorBlendState = &cb;
+    pci.layout = m_pipeline_layout; pci.renderPass = m_render_pass;
+    VK_CHECK(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pci, nullptr, &m_pipeline));
+
+    vkDestroyShaderModule(m_device, vert_mod, nullptr);
+    vkDestroyShaderModule(m_device, frag_mod, nullptr);
+    LOGI("Pipeline created OK");
+    return true;
+}
+
+bool GS_Vulkan::create_vertex_buffer(VkDeviceSize size) {
+    VkBufferCreateInfo bi{}; bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bi.size = size; bi.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VK_CHECK(vkCreateBuffer(m_device, &bi, nullptr, &m_vb));
+
+    VkMemoryRequirements mr; vkGetBufferMemoryRequirements(m_device, m_vb, &mr);
+    VkMemoryAllocateInfo ai{}; ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = mr.size;
+    ai.memoryTypeIndex = find_memory_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkAllocateMemory(m_device, &ai, nullptr, &m_vb_mem));
+    vkBindBufferMemory(m_device, m_vb, m_vb_mem, 0);
+    m_vb_capacity = size;
+    vkMapMemory(m_device, m_vb_mem, 0, size, 0, &m_vb_mapped);
+    LOGI("Vertex buffer created: %zu bytes", (size_t)size);
+    return true;
 }
 
 void GS_Vulkan::shutdown() {
     if(!m_ready) return;
     vkDeviceWaitIdle(m_device);
+    if(m_vb)vkDestroyBuffer(m_device,m_vb,nullptr);
+    if(m_vb_mem)vkFreeMemory(m_device,m_vb_mem,nullptr);
+    if(m_pipeline)vkDestroyPipeline(m_device,m_pipeline,nullptr);
+    if(m_pipeline_layout)vkDestroyPipelineLayout(m_device,m_pipeline_layout,nullptr);
     if(m_in_flight)vkDestroyFence(m_device,m_in_flight,nullptr);
     if(m_render_done)vkDestroySemaphore(m_device,m_render_done,nullptr);
     if(m_img_available)vkDestroySemaphore(m_device,m_img_available,nullptr);
@@ -102,15 +343,40 @@ bool GS_Vulkan::begin_frame() {
     
     vkCmdBeginRenderPass(cb, &rp, VK_SUBPASS_CONTENTS_INLINE);
     
+    if (m_pipeline) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
+    }
+    
     return true; 
 }
 
 void GS_Vulkan::end_frame() {}
 
 void GS_Vulkan::draw_primitive(const PS2_Vertex* verts, uint32_t count, uint32_t) {
-    if(!m_ready || count == 0) return;
+    if(!m_ready || count == 0 || !m_pipeline) return;
     g_vulkan_draws++;
-    // Aquí en el futuro irán las llamadas a vkCmdBindPipeline y vkCmdDraw
+
+    VkCommandBuffer cb = m_cmd_bufs[m_current_image];
+
+    uint32_t offset = m_vb_vertex_offset;
+    uint32_t needed = count * sizeof(PS2_Vertex);
+    if (offset + needed > m_vb_capacity) {
+        offset = 0;
+        m_vb_vertex_offset = 0;
+    }
+
+    memcpy((uint8_t*)m_vb_mapped + offset, verts, needed);
+    VkDeviceSize buf_offset = offset;
+    vkCmdBindVertexBuffers(cb, 0, 1, &m_vb, &buf_offset);
+
+    float scale[2] = {2.0f / m_sc_extent.width, -2.0f / m_sc_extent.height};
+    float offset2[2] = {-1.0f, 1.0f};
+    vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 8, scale);
+    vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 8, 8, offset2);
+
+    vkCmdDraw(cb, count, 1, 0, 0);
+
+    m_vb_vertex_offset += needed;
 }
 
 void GS_Vulkan::present_frame() {

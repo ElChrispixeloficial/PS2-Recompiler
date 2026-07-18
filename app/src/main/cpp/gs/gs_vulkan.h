@@ -83,6 +83,8 @@ private:
     VkBuffer                 m_vb                 = VK_NULL_HANDLE;
     VkDeviceMemory           m_vb_mem             = VK_NULL_HANDLE;
     VkDeviceSize             m_vb_capacity        = 0;
+    void*                    m_vb_mapped          = nullptr;
+    uint32_t                 m_vb_vertex_offset   = 0;
 
     uint32_t                 m_gfx_family         = 0;
     uint32_t                 m_present_family     = 0;
