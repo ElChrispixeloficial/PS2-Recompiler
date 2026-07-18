@@ -215,20 +215,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun resolveUri(uri: Uri, fileName: String? = null): String? = when (uri.scheme) {
         "file" -> uri.path
-        "content" -> try {
-            val targetName = fileName ?: uniqueFileName(uri)
-            val f = File(cacheDir, targetName)
-            val bytesCopied = contentResolver.openInputStream(uri)?.use { i ->
-                f.outputStream().use { o -> i.copyTo(o) }
+        "content" -> {
+            try {
+                val targetName = fileName ?: uniqueFileName(uri)
+                val f = File(cacheDir, targetName)
+                val bytesCopied = contentResolver.openInputStream(uri)?.use { i ->
+                    f.outputStream().use { o -> i.copyTo(o) }
+                }
+                if (bytesCopied == null || bytesCopied == 0L) {
+                    f.delete()
+                    null
+                } else {
+                    f.absolutePath
+                }
+            } catch (e: Exception) {
+                File(cacheDir, fileName ?: "game.iso").delete()
+                null
             }
-            if (bytesCopied == null || bytesCopied == 0L) {
-                f.delete()
-                return null
-            }
-            f.absolutePath
-        } catch (e: Exception) {
-            File(cacheDir, fileName ?: "game.iso").delete()
-            null
         }
         else -> null
     }
