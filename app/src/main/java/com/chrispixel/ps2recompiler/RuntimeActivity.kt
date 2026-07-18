@@ -22,6 +22,7 @@ import com.chrispixel.ps2recompiler.databinding.ActivityRuntimeBinding
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.*
+import java.io.File
 
 class RuntimeActivity : AppCompatActivity() {
 
@@ -76,14 +77,16 @@ class RuntimeActivity : AppCompatActivity() {
         
         binding.surfaceView.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(h: SurfaceHolder) {
-                nativeSurfaceCreated(h.surface)
+                try { nativeSurfaceCreated(h.surface) } catch (_: Exception) {}
                 surfaceReady = true
                 if (!loadStarted) load()
             }
-            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) { nativeSurfaceChanged(h.surface, w, ht) }
+            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {
+                try { nativeSurfaceChanged(h.surface, w, ht) } catch (_: Exception) {}
+            }
             override fun surfaceDestroyed(h: SurfaceHolder) {
                 surfaceReady = false
-                nativeSurfaceDestroyed()
+                try { nativeSurfaceDestroyed() } catch (_: Exception) {}
             }
         })
         binding.surfaceView.setOnClickListener { toggleHud() }
@@ -166,6 +169,18 @@ class RuntimeActivity : AppCompatActivity() {
     private fun load() {
         if (loadStarted) return
         loadStarted = true
+
+        val isoFile = File(isoPath)
+        if (!isoFile.exists() || isoFile.length() == 0L) {
+            binding.layoutLoading.visibility = View.GONE
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Archivo no encontrado")
+                .setMessage("El ISO no existe o esta vacio ($isoPath). Vuelve a la biblioteca y anadelo de nuevo.")
+                .setPositiveButton("OK") { _, _ -> finish() }
+                .show()
+            return
+        }
+
         binding.layoutLoading.visibility = View.VISIBLE
         binding.tvLoadingStatus.text = getString(R.string.game_loading)
         binding.tvLoadingDetail.text = isoPath.substringAfterLast('/')

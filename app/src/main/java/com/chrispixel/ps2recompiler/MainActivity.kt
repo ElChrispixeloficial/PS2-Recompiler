@@ -262,15 +262,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun launchGame(game: GameEntry) {
+        val isoFile = File(game.isoPath)
+        if (!isoFile.exists() || isoFile.length() == 0L) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Archivo no encontrado")
+                .setMessage("El ISO no existe o esta vacio. Puede haber sido eliminado del cache. Elimina el juego y vuelve a anadirlo.")
+                .setPositiveButton("OK") { _, _ ->
+                    GameLibrary.remove(this, game.isoPath)
+                    loadLibrary()
+                }
+                .show()
+            return
+        }
+
         GameLibrary.updateLastPlayed(this, game.isoPath)
         
-        // Pasar la ruta de la BIOS a RuntimeActivity
         val biosPath = getSharedPreferences("ps2_prefs", MODE_PRIVATE).getString("bios_path", "")
         
         val intent = Intent(this, RuntimeActivity::class.java).apply {
             putExtra(RuntimeActivity.EXTRA_ISO_PATH, game.isoPath)
             putExtra(RuntimeActivity.EXTRA_GAME_TITLE, game.title)
-            putExtra("bios_path", biosPath) // <--- Pasar la BIOS
+            putExtra("bios_path", biosPath)
         }
         startActivity(intent,
             ActivityOptionsCompat.makeSceneTransitionAnimation(this).toBundle())
