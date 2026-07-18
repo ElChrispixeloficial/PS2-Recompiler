@@ -19,6 +19,7 @@ struct VulkanTexture {
     VkImage        image    = VK_NULL_HANDLE;
     VkDeviceMemory memory   = VK_NULL_HANDLE;
     VkImageView    view     = VK_NULL_HANDLE;
+    VkDescriptorSet ds     = VK_NULL_HANDLE;
     uint32_t       width    = 0;
     uint32_t       height   = 0;
 };
@@ -27,131 +28,80 @@ static std::vector<VulkanTexture> s_textures;
 static uint32_t s_bound_texture = 0;
 
 static const uint32_t ps2_vert_spv[] = {
-    0x07230203, 0x00010000, 0x00080001, 0x0000002E,
-    0x00000017, 0x00020011, 0x00000001, 0x0006000B,
-    0x00000009, 0x4C534C47, 0x00000004, 0x00000004,
-    0x00000009, 0x00000000, 0x0000000B, 0x00000013,
-    0x00000001, 0x0000000E, 0x00000012, 0x00000005,
-    0x00000005, 0x00000009, 0x00000000, 0x00050051,
-    0x00000009, 0x00000004, 0x00000003, 0x00000001,
-    0x00000000, 0x00050051, 0x00000009, 0x00000005,
-    0x00000003, 0x00000001, 0x00000001, 0x00050051,
-    0x00000009, 0x00000006, 0x00000003, 0x00000001,
-    0x00000002, 0x00050051, 0x00000009, 0x00000008,
-    0x00000003, 0x00000001, 0x00000003, 0x00030047,
-    0x00000009, 0x00000002, 0x00000001, 0x00050048,
-    0x00000009, 0x00000000, 0x00000004, 0x00000002,
-    0x00000001, 0x00050048, 0x00000009, 0x00000001,
-    0x00000005, 0x00000003, 0x00000002, 0x00050048,
-    0x00000009, 0x00000002, 0x00000006, 0x00000003,
-    0x00000004, 0x00030047, 0x00000009, 0x00000001,
-    0x00000003, 0x00020044, 0x0000000B, 0x00000001,
-    0x00000004, 0x00020044, 0x0000000B, 0x00000001,
-    0x00000008, 0x00010044, 0x0000000B, 0x00000002,
-    0x00050048, 0x00000009, 0x00000003, 0x00000007,
-    0x00000001, 0x00000000, 0x00050048, 0x00000009,
-    0x00000004, 0x00000008, 0x00000000, 0x00000002,
-    0x00030047, 0x00000009, 0x00000002, 0x00000001,
-    0x00040047, 0x0000000B, 0x0000000B, 0x00000000,
-    0x00050044, 0x0000000B, 0x00000001, 0x00000012,
-    0x00000000, 0x00020044, 0x0000000B, 0x00000002,
-    0x00000004, 0x00050048, 0x00000009, 0x00000006,
-    0x00000006, 0x00000003, 0x00000002, 0x00020048,
-    0x00000009, 0x00000006, 0x00000007, 0x00040047,
-    0x0000000B, 0x00000009, 0x00000001, 0x00050048,
-    0x00000009, 0x00000007, 0x00000008, 0x00000007,
-    0x00000001, 0x00040047, 0x0000000B, 0x0000000E,
-    0x00000000, 0x00050044, 0x0000000B, 0x00000001,
-    0x00000017, 0x00000000, 0x00020044, 0x0000000B,
-    0x00000002, 0x00000008, 0x00050048, 0x00000009,
-    0x00000008, 0x00000006, 0x00000003, 0x00000004,
-    0x00020048, 0x00000009, 0x00000008, 0x00000007,
-    0x00040047, 0x0000000B, 0x00000013, 0x00000002,
-    0x00020044, 0x0000000B, 0x00000001, 0x0000001E,
-    0x00050048, 0x00000009, 0x00000009, 0x00000006,
-    0x00000003, 0x00000005, 0x00020048, 0x00000009,
-    0x00000009, 0x00000007, 0x00040047, 0x0000000B,
-    0x00000018, 0x00000000, 0x00050048, 0x00000009,
-    0x0000000A, 0x00000008, 0x00000000, 0x00000002,
-    0x00030047, 0x00000009, 0x00000002, 0x00000005,
-    0x00040047, 0x0000000B, 0x0000001D, 0x00000001,
-    0x00050048, 0x00000009, 0x0000000B, 0x00000009,
-    0x00000003, 0x00000006, 0x00020048, 0x00000009,
-    0x0000000B, 0x00000007, 0x00040047, 0x0000000B,
-    0x00000023, 0x00000003, 0x00050044, 0x0000000B,
-    0x00000001, 0x00000029, 0x00000000, 0x00020044,
-    0x0000000B, 0x00000002, 0x00000006, 0x00050048,
-    0x00000009, 0x0000000C, 0x00000006, 0x00000003,
-    0x00000007, 0x00020048, 0x00000009, 0x0000000C,
-    0x00000007, 0x00040047, 0x0000000B, 0x0000002E,
-    0x00000001, 0x00050048, 0x00000009, 0x0000000D,
-    0x00000008, 0x00000000, 0x00000002, 0x00030047,
-    0x00000009, 0x00000002, 0x00000007, 0x00040047,
-    0x0000000B, 0x0000002F, 0x00000002, 0x0004003D,
-    0x00000009, 0x00000004, 0x00000004, 0x00050041,
-    0x0000000B, 0x0000000D, 0x00000004, 0x00000001,
-    0x00000002, 0x0004003D, 0x00000009, 0x00000005,
-    0x00000005, 0x00050041, 0x0000000B, 0x0000000E,
-    0x00000005, 0x00000001, 0x00000001, 0x00050041,
-    0x0000000B, 0x00000013, 0x0000000D, 0x00000002,
-    0x00000003, 0x0004003D, 0x00000009, 0x00000006,
-    0x00000006, 0x00050041, 0x0000000B, 0x00000018,
-    0x00000006, 0x00000001, 0x00000004, 0x0003003E,
-    0x00000009, 0x00000003, 0x0000000E, 0x0004003D,
-    0x00000009, 0x00000008, 0x00000008, 0x00050041,
-    0x0000000B, 0x0000001D, 0x00000008, 0x00000001,
-    0x00000005, 0x0004003D, 0x00000009, 0x00000009,
-    0x00000009, 0x00050041, 0x0000000B, 0x00000023,
-    0x00000009, 0x00000001, 0x00000002, 0x0004003D,
-    0x00000009, 0x0000000A, 0x0000000A, 0x00050041,
-    0x0000000B, 0x0000002E, 0x0000000A, 0x00000001,
-    0x00000004, 0x00050041, 0x0000000B, 0x0000002F,
-    0x0000000A, 0x00000001, 0x00000003, 0x0003003E,
-    0x00000009, 0x0000000B, 0x0000001D, 0x000100FD,
-    0x00010038
+    0x07230203, 0x00010000, 0x000d000a, 0x0000002f, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x000b000f, 0x00000000, 0x00000004, 0x6e69616d, 0x00000000, 0x0000000d, 0x00000011, 0x00000027,
+    0x00000028, 0x0000002b, 0x0000002d, 0x00030003, 0x00000002, 0x000001c2, 0x000a0004, 0x475f4c47,
+    0x4c474f4f, 0x70635f45, 0x74735f70, 0x5f656c79, 0x656e696c, 0x7269645f, 0x69746365, 0x00006576,
+    0x00080004, 0x475f4c47, 0x4c474f4f, 0x6e695f45, 0x64756c63, 0x69645f65, 0x74636572, 0x00657669,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00060005, 0x0000000b, 0x505f6c67, 0x65567265,
+    0x78657472, 0x00000000, 0x00060006, 0x0000000b, 0x00000000, 0x505f6c67, 0x7469736f, 0x006e6f69,
+    0x00070006, 0x0000000b, 0x00000001, 0x505f6c67, 0x746e696f, 0x657a6953, 0x00000000, 0x00070006,
+    0x0000000b, 0x00000002, 0x435f6c67, 0x4470696c, 0x61747369, 0x0065636e, 0x00070006, 0x0000000b,
+    0x00000003, 0x435f6c67, 0x446c6c75, 0x61747369, 0x0065636e, 0x00030005, 0x0000000d, 0x00000000,
+    0x00040005, 0x00000011, 0x705f6e69, 0x0000736f, 0x00030005, 0x00000015, 0x00004350, 0x00050006,
+    0x00000015, 0x00000000, 0x6c616373, 0x00000065, 0x00050006, 0x00000015, 0x00000001, 0x7366666f,
+    0x00007465, 0x00030005, 0x00000017, 0x00006370, 0x00050005, 0x00000027, 0x5f74756f, 0x6f6c6f63,
+    0x00000072, 0x00050005, 0x00000028, 0x635f6e69, 0x726f6c6f, 0x00000000, 0x00040005, 0x0000002b,
+    0x5f74756f, 0x00007675, 0x00040005, 0x0000002d, 0x755f6e69, 0x00000076, 0x00050048, 0x0000000b,
+    0x00000000, 0x0000000b, 0x00000000, 0x00050048, 0x0000000b, 0x00000001, 0x0000000b, 0x00000001,
+    0x00050048, 0x0000000b, 0x00000002, 0x0000000b, 0x00000003, 0x00050048, 0x0000000b, 0x00000003,
+    0x0000000b, 0x00000004, 0x00030047, 0x0000000b, 0x00000002, 0x00040047, 0x00000011, 0x0000001e,
+    0x00000000, 0x00050048, 0x00000015, 0x00000000, 0x00000023, 0x00000000, 0x00050048, 0x00000015,
+    0x00000001, 0x00000023, 0x00000008, 0x00030047, 0x00000015, 0x00000002, 0x00040047, 0x00000027,
+    0x0000001e, 0x00000000, 0x00040047, 0x00000028, 0x0000001e, 0x00000001, 0x00040047, 0x0000002b,
+    0x0000001e, 0x00000001, 0x00040047, 0x0000002d, 0x0000001e, 0x00000002, 0x00020013, 0x00000002,
+    0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006, 0x00000020, 0x00040017, 0x00000007,
+    0x00000006, 0x00000004, 0x00040015, 0x00000008, 0x00000020, 0x00000000, 0x0004002b, 0x00000008,
+    0x00000009, 0x00000001, 0x0004001c, 0x0000000a, 0x00000006, 0x00000009, 0x0006001e, 0x0000000b,
+    0x00000007, 0x00000006, 0x0000000a, 0x0000000a, 0x00040020, 0x0000000c, 0x00000003, 0x0000000b,
+    0x0004003b, 0x0000000c, 0x0000000d, 0x00000003, 0x00040015, 0x0000000e, 0x00000020, 0x00000001,
+    0x0004002b, 0x0000000e, 0x0000000f, 0x00000000, 0x00040020, 0x00000010, 0x00000001, 0x00000007,
+    0x0004003b, 0x00000010, 0x00000011, 0x00000001, 0x00040017, 0x00000012, 0x00000006, 0x00000002,
+    0x0004001e, 0x00000015, 0x00000012, 0x00000012, 0x00040020, 0x00000016, 0x00000009, 0x00000015,
+    0x0004003b, 0x00000016, 0x00000017, 0x00000009, 0x00040020, 0x00000018, 0x00000009, 0x00000012,
+    0x0004002b, 0x0000000e, 0x0000001c, 0x00000001, 0x0004002b, 0x00000006, 0x00000020, 0x00000000,
+    0x0004002b, 0x00000006, 0x00000021, 0x3f800000, 0x00040020, 0x00000025, 0x00000003, 0x00000007,
+    0x0004003b, 0x00000025, 0x00000027, 0x00000003, 0x0004003b, 0x00000010, 0x00000028, 0x00000001,
+    0x00040020, 0x0000002a, 0x00000003, 0x00000012, 0x0004003b, 0x0000002a, 0x0000002b, 0x00000003,
+    0x00040020, 0x0000002c, 0x00000001, 0x00000012, 0x0004003b, 0x0000002c, 0x0000002d, 0x00000001,
+    0x00050036, 0x00000002, 0x00000004, 0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d,
+    0x00000007, 0x00000013, 0x00000011, 0x0007004f, 0x00000012, 0x00000014, 0x00000013, 0x00000013,
+    0x00000000, 0x00000001, 0x00050041, 0x00000018, 0x00000019, 0x00000017, 0x0000000f, 0x0004003d,
+    0x00000012, 0x0000001a, 0x00000019, 0x00050085, 0x00000012, 0x0000001b, 0x00000014, 0x0000001a,
+    0x00050041, 0x00000018, 0x0000001d, 0x00000017, 0x0000001c, 0x0004003d, 0x00000012, 0x0000001e,
+    0x0000001d, 0x00050081, 0x00000012, 0x0000001f, 0x0000001b, 0x0000001e, 0x00050051, 0x00000006,
+    0x00000022, 0x0000001f, 0x00000000, 0x00050051, 0x00000006, 0x00000023, 0x0000001f, 0x00000001,
+    0x00070050, 0x00000007, 0x00000024, 0x00000022, 0x00000023, 0x00000020, 0x00000021, 0x00050041,
+    0x00000025, 0x00000026, 0x0000000d, 0x0000000f, 0x0003003e, 0x00000026, 0x00000024, 0x0004003d,
+    0x00000007, 0x00000029, 0x00000028, 0x0003003e, 0x00000027, 0x00000029, 0x0004003d, 0x00000012,
+    0x0000002e, 0x0000002d, 0x0003003e, 0x0000002b, 0x0000002e, 0x000100fd, 0x00010038,
 };
 
 static const uint32_t ps2_frag_spv[] = {
-    0x07230203, 0x00010000, 0x00080001, 0x0000001C,
-    0x00000017, 0x00020011, 0x00000001, 0x0006000B,
-    0x00000009, 0x4C534C47, 0x00000004, 0x00000004,
-    0x00000009, 0x00000000, 0x0000000B, 0x00000013,
-    0x00000001, 0x0000000E, 0x00000012, 0x00000005,
-    0x00000005, 0x00000009, 0x00000000, 0x00050051,
-    0x00000009, 0x00000004, 0x00000003, 0x00000001,
-    0x00000000, 0x00050051, 0x00000009, 0x00000005,
-    0x00000003, 0x00000001, 0x00000001, 0x00030047,
-    0x00000009, 0x00000002, 0x00000001, 0x00040047,
-    0x00000009, 0x00000004, 0x00000001, 0x00040047,
-    0x00000009, 0x00000005, 0x00000000, 0x00020044,
-    0x0000000B, 0x00000001, 0x00000004, 0x00020044,
-    0x0000000B, 0x00000001, 0x00000008, 0x00010044,
-    0x0000000B, 0x00000002, 0x00050044, 0x0000000B,
-    0x00000001, 0x00000012, 0x00000000, 0x00020044,
-    0x0000000B, 0x00000002, 0x00000004, 0x00040047,
-    0x0000000B, 0x0000000B, 0x00000000, 0x00050048,
-    0x00000009, 0x00000004, 0x00000006, 0x00000003,
-    0x00000002, 0x00020048, 0x00000009, 0x00000004,
-    0x00000007, 0x00040047, 0x00000009, 0x00000008,
-    0x00000000, 0x00050048, 0x00000009, 0x00000004,
-    0x00000009, 0x00000003, 0x00000004, 0x00020048,
-    0x00000009, 0x00000004, 0x0000000A, 0x00040047,
-    0x00000009, 0x0000000D, 0x00000001, 0x00020044,
-    0x0000000B, 0x00000001, 0x00000017, 0x00050048,
-    0x00000009, 0x00000005, 0x0000000B, 0x00000003,
-    0x00000005, 0x00020048, 0x00000009, 0x00000005,
-    0x0000000C, 0x00040047, 0x0000000B, 0x0000001C,
-    0x00000000, 0x0004003D, 0x00000009, 0x00000004,
-    0x00000004, 0x0004003D, 0x00000009, 0x00000005,
-    0x00000005, 0x00050041, 0x0000000B, 0x0000000B,
-    0x00000004, 0x00000001, 0x00000002, 0x00050041,
-    0x0000000B, 0x0000000D, 0x0000000B, 0x00000002,
-    0x00000003, 0x0004003D, 0x00000009, 0x00000008,
-    0x00000008, 0x00050085, 0x00000009, 0x00000008,
-    0x00000005, 0x00000004, 0x00050041, 0x0000000B,
-    0x0000001C, 0x00000008, 0x00000001, 0x00000001,
-    0x0003003E, 0x00000009, 0x00000006, 0x0000000D,
-    0x000100FD, 0x00010038
+    0x07230203, 0x00010000, 0x000d000a, 0x00000018, 0x00000000, 0x00020011, 0x00000001, 0x0006000b,
+    0x00000001, 0x4c534c47, 0x6474732e, 0x3035342e, 0x00000000, 0x0003000e, 0x00000000, 0x00000001,
+    0x0008000f, 0x00000004, 0x00000004, 0x6e69616d, 0x00000000, 0x00000009, 0x0000000b, 0x00000014,
+    0x00030010, 0x00000004, 0x00000007, 0x00030003, 0x00000002, 0x000001c2, 0x000a0004, 0x475f4c47,
+    0x4c474f4f, 0x70635f45, 0x74735f70, 0x5f656c79, 0x656e696c, 0x7269645f, 0x69746365, 0x00006576,
+    0x00080004, 0x475f4c47, 0x4c474f4f, 0x6e695f45, 0x64756c63, 0x69645f65, 0x74636572, 0x00657669,
+    0x00040005, 0x00000004, 0x6e69616d, 0x00000000, 0x00050005, 0x00000009, 0x67617266, 0x6c6f635f,
+    0x0000726f, 0x00050005, 0x0000000b, 0x635f6e69, 0x726f6c6f, 0x00000000, 0x00030005, 0x00000010,
+    0x00786574, 0x00040005, 0x00000014, 0x755f6e69, 0x00000076, 0x00040047, 0x00000009, 0x0000001e,
+    0x00000000, 0x00040047, 0x0000000b, 0x0000001e, 0x00000000, 0x00040047, 0x00000010, 0x00000022,
+    0x00000000, 0x00040047, 0x00000010, 0x00000021, 0x00000000, 0x00040047, 0x00000014, 0x0000001e,
+    0x00000001, 0x00020013, 0x00000002, 0x00030021, 0x00000003, 0x00000002, 0x00030016, 0x00000006,
+    0x00000020, 0x00040017, 0x00000007, 0x00000006, 0x00000004, 0x00040020, 0x00000008, 0x00000003,
+    0x00000007, 0x0004003b, 0x00000008, 0x00000009, 0x00000003, 0x00040020, 0x0000000a, 0x00000001,
+    0x00000007, 0x0004003b, 0x0000000a, 0x0000000b, 0x00000001, 0x00090019, 0x0000000d, 0x00000006,
+    0x00000001, 0x00000000, 0x00000000, 0x00000000, 0x00000001, 0x00000000, 0x0003001b, 0x0000000e,
+    0x0000000d, 0x00040020, 0x0000000f, 0x00000000, 0x0000000e, 0x0004003b, 0x0000000f, 0x00000010,
+    0x00000000, 0x00040017, 0x00000012, 0x00000006, 0x00000002, 0x00040020, 0x00000013, 0x00000001,
+    0x00000012, 0x0004003b, 0x00000013, 0x00000014, 0x00000001, 0x00050036, 0x00000002, 0x00000004,
+    0x00000000, 0x00000003, 0x000200f8, 0x00000005, 0x0004003d, 0x00000007, 0x0000000c, 0x0000000b,
+    0x0004003d, 0x0000000e, 0x00000011, 0x00000010, 0x0004003d, 0x00000012, 0x00000015, 0x00000014,
+    0x00050057, 0x00000007, 0x00000016, 0x00000011, 0x00000015, 0x00050085, 0x00000007, 0x00000017,
+    0x0000000c, 0x00000016, 0x0003003e, 0x00000009, 0x00000017, 0x000100fd, 0x00010038,
 };
 
 static uint32_t find_mem_type(VkPhysicalDevice dev, uint32_t type_filter, VkMemoryPropertyFlags props) {
@@ -454,6 +404,8 @@ bool GS_Vulkan::create_pipeline() {
     plci.sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges    = &pcr;
+    plci.setLayoutCount         = 1;
+    plci.pSetLayouts            = &m_ds_layout;
 
     VkResult r = vkCreatePipelineLayout(m_device, &plci, nullptr, &m_pipeline_layout);
     if (r != VK_SUCCESS) { LOGE("vkCreatePipelineLayout failed: %d", r); return false; }
@@ -565,6 +517,187 @@ bool GS_Vulkan::create_vertex_buffer(VkDeviceSize size) {
     return true;
 }
 
+bool GS_Vulkan::create_texturing() {
+    VkSamplerCreateInfo sci{};
+    sci.sType                   = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    sci.magFilter               = VK_FILTER_LINEAR;
+    sci.minFilter               = VK_FILTER_LINEAR;
+    sci.addressModeU            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeV            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.addressModeW            = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    sci.anisotropyEnable        = VK_FALSE;
+    sci.maxAnisotropy           = 1.0f;
+    sci.borderColor             = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+    sci.unnormalizedCoordinates = VK_FALSE;
+    sci.compareEnable           = VK_FALSE;
+    sci.mipmapMode              = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    if (vkCreateSampler(m_device, &sci, nullptr, &m_sampler) != VK_SUCCESS) {
+        LOGE("Failed to create sampler"); return false;
+    }
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding         = 0;
+    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dsci{};
+    dsci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dsci.bindingCount = 1;
+    dsci.pBindings    = &binding;
+    if (vkCreateDescriptorSetLayout(m_device, &dsci, nullptr, &m_ds_layout) != VK_SUCCESS) {
+        LOGE("Failed to create descriptor set layout"); return false;
+    }
+
+    VkDescriptorPoolSize pool_size{};
+    pool_size.type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pool_size.descriptorCount = 256;
+
+    VkDescriptorPoolCreateInfo dpi{};
+    dpi.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpi.maxSets       = 256;
+    dpi.poolSizeCount = 1;
+    dpi.pPoolSizes    = &pool_size;
+    dpi.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    if (vkCreateDescriptorPool(m_device, &dpi, nullptr, &m_desc_pool) != VK_SUCCESS) {
+        LOGE("Failed to create descriptor pool"); return false;
+    }
+
+    uint32_t white_pixel = 0xFFFFFFFF;
+    VkImageCreateInfo img_ci{};
+    img_ci.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    img_ci.imageType     = VK_IMAGE_TYPE_2D;
+    img_ci.extent.width  = 1;
+    img_ci.extent.height = 1;
+    img_ci.extent.depth  = 1;
+    img_ci.mipLevels     = 1;
+    img_ci.arrayLayers   = 1;
+    img_ci.format        = VK_FORMAT_R8G8B8A8_UNORM;
+    img_ci.tiling        = VK_IMAGE_TILING_OPTIMAL;
+    img_ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    img_ci.usage         = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    if (vkCreateImage(m_device, &img_ci, nullptr, &m_white_image) != VK_SUCCESS) {
+        LOGE("Failed to create white texture"); return false;
+    }
+
+    VkMemoryRequirements mr;
+    vkGetImageMemoryRequirements(m_device, m_white_image, &mr);
+    VkMemoryAllocateInfo mai{};
+    mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize  = mr.size;
+    mai.memoryTypeIndex = find_memory_type(mr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(m_device, &mai, nullptr, &m_white_memory);
+    vkBindImageMemory(m_device, m_white_image, m_white_memory, 0);
+
+    VkImageViewCreateInfo vi{};
+    vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    vi.image                           = m_white_image;
+    vi.viewType                        = VK_IMAGE_TYPE_2D;
+    vi.format                          = VK_FORMAT_R8G8B8A8_UNORM;
+    vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    vi.subresourceRange.levelCount     = 1;
+    vi.subresourceRange.layerCount     = 1;
+    vkCreateImageView(m_device, &vi, nullptr, &m_white_view);
+
+    VkCommandBuffer cmd;
+    VkCommandBufferAllocateInfo cmd_ai{};
+    cmd_ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmd_ai.commandPool        = m_cmd_pool;
+    cmd_ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cmd_ai.commandBufferCount = 1;
+    vkAllocateCommandBuffers(m_device, &cmd_ai, &cmd);
+
+    VkCommandBufferBeginInfo cmd_bi{};
+    cmd_bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    cmd_bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &cmd_bi);
+
+    VkImageMemoryBarrier barrier{};
+    barrier.sType                           = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.oldLayout                       = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout                       = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image                           = m_white_image;
+    barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.levelCount     = 1;
+    barrier.subresourceRange.layerCount     = 1;
+    barrier.srcAccessMask                   = 0;
+    barrier.dstAccessMask                   = VK_ACCESS_TRANSFER_WRITE_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy copy{};
+    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.layerCount = 1;
+    copy.imageExtent = {1, 1, 1};
+
+    VkBuffer staging;
+    VkDeviceMemory staging_mem;
+    VkBufferCreateInfo bci{};
+    bci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size  = 4;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    vkCreateBuffer(m_device, &bci, nullptr, &staging);
+    VkMemoryRequirements bmr;
+    vkGetBufferMemoryRequirements(m_device, staging, &bmr);
+    VkMemoryAllocateInfo bai{};
+    bai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    bai.allocationSize  = bmr.size;
+    bai.memoryTypeIndex = find_memory_type(bmr.memoryTypeBits,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    vkAllocateMemory(m_device, &bai, nullptr, &staging_mem);
+    vkBindBufferMemory(m_device, staging, staging_mem, 0);
+    void* mapped;
+    vkMapMemory(m_device, staging_mem, 0, 4, 0, &mapped);
+    memcpy(mapped, &white_pixel, 4);
+    vkUnmapMemory(m_device, staging_mem);
+
+    vkCmdCopyBufferToImage(cmd, staging, m_white_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+
+    barrier.oldLayout     = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout     = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    vkEndCommandBuffer(cmd);
+    VkSubmitInfo submit{};
+    submit.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers    = &cmd;
+    vkQueueSubmit(m_gfx_queue, 1, &submit, VK_NULL_HANDLE);
+    vkQueueWaitIdle(m_gfx_queue);
+    vkFreeCommandBuffers(m_device, m_cmd_pool, 1, &cmd);
+    vkDestroyBuffer(m_device, staging, nullptr);
+    vkFreeMemory(m_device, staging_mem, nullptr);
+
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = m_desc_pool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts        = &m_ds_layout;
+    vkAllocateDescriptorSets(m_device, &dsai, &m_white_ds);
+
+    VkDescriptorImageInfo dii{};
+    dii.sampler     = m_sampler;
+    dii.imageView   = m_white_view;
+    dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet wds{};
+    wds.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    wds.dstSet          = m_white_ds;
+    wds.dstBinding      = 0;
+    wds.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    wds.descriptorCount = 1;
+    wds.pImageInfo      = &dii;
+    vkUpdateDescriptorSets(m_device, 1, &wds, 0, nullptr);
+
+    LOGI("Texturing initialized (sampler, layout, pool, white fallback)");
+    return true;
+}
+
 bool GS_Vulkan::init(ANativeWindow* window) {
     LOGI("Initializing Vulkan...");
 
@@ -574,6 +707,7 @@ bool GS_Vulkan::init(ANativeWindow* window) {
     if (!create_logical_device())    return false;
     if (!create_swapchain())         return false;
     if (!create_render_pass())       return false;
+    if (!create_texturing())         return false;
     if (!create_pipeline())          return false;
     if (!create_framebuffers())      return false;
     if (!create_command_pool())      return false;
@@ -664,6 +798,12 @@ void GS_Vulkan::draw_primitive(const PS2_Vertex* verts, uint32_t count, uint32_t
     float offset[2] = { -1.0f, 1.0f };
     vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 0, 8, scale);
     vkCmdPushConstants(cb, m_pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT, 8, 8, offset);
+
+    VkDescriptorSet ds = m_white_ds;
+    if (m_current_ds_idx < s_textures.size() && s_textures[m_current_ds_idx].ds) {
+        ds = s_textures[m_current_ds_idx].ds;
+    }
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline_layout, 0, 1, &ds, 0, nullptr);
 
     vkCmdDraw(cb, count, 1, 0, 0);
 
@@ -884,12 +1024,33 @@ uint32_t GS_Vulkan::upload_texture(const uint8_t* data, uint32_t width, uint32_t
 
     uint32_t id = (uint32_t)s_textures.size();
     s_textures.push_back(tex);
+
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = m_desc_pool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts        = &m_ds_layout;
+    if (vkAllocateDescriptorSets(m_device, &dsai, &s_textures[id].ds) == VK_SUCCESS) {
+        VkDescriptorImageInfo dii{};
+        dii.sampler     = m_sampler;
+        dii.imageView   = s_textures[id].view;
+        dii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet wds{};
+        wds.sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        wds.dstSet          = s_textures[id].ds;
+        wds.dstBinding      = 0;
+        wds.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wds.descriptorCount = 1;
+        wds.pImageInfo      = &dii;
+        vkUpdateDescriptorSets(m_device, 1, &wds, 0, nullptr);
+    }
+
     LOGI("Texture uploaded: id=%u %ux%u psm=%u", id, width, height, psm);
     return id;
 }
 
 void GS_Vulkan::bind_texture(uint32_t tex_id) {
-    s_bound_texture = tex_id;
+    m_current_ds_idx = tex_id;
 }
 
 void GS_Vulkan::shutdown() {
@@ -903,6 +1064,13 @@ void GS_Vulkan::shutdown() {
         if (tex.memory) vkFreeMemory(m_device, tex.memory, nullptr);
     }
     s_textures.clear();
+
+    if (m_white_view)   vkDestroyImageView(m_device, m_white_view, nullptr);
+    if (m_white_image)  vkDestroyImage(m_device, m_white_image, nullptr);
+    if (m_white_memory) vkFreeMemory(m_device, m_white_memory, nullptr);
+    if (m_desc_pool)    vkDestroyDescriptorPool(m_device, m_desc_pool, nullptr);
+    if (m_ds_layout)    vkDestroyDescriptorSetLayout(m_device, m_ds_layout, nullptr);
+    if (m_sampler)      vkDestroySampler(m_device, m_sampler, nullptr);
 
     if (m_vb)      vkDestroyBuffer(m_device, m_vb, nullptr);
     if (m_vb_mem)  vkFreeMemory(m_device, m_vb_mem, nullptr);

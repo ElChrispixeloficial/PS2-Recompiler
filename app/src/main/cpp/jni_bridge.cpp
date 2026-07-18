@@ -68,7 +68,16 @@ extern "C" void push_jit_log(const char* msg) {
 
 static void full_cleanup() {
     g_running = false; g_paused = false;
-    if (g_cpu_thread.joinable()) g_cpu_thread.join();
+    if (g_cpu_thread.joinable()) {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (g_cpu_thread.joinable() && !g_running) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (g_cpu_thread.joinable()) {
+            g_cpu_thread.detach();
+        }
+    }
     g_dma.reset(); g_vu.reset(); g_iop.reset(); g_gs.reset(); g_ee.reset();
     g_gs_writes = g_gs_kicks = g_vulkan_draws = g_vulkan_presents = g_ee_iters = 0;
     g_last_gs_reg = g_last_gs_addr = 0;

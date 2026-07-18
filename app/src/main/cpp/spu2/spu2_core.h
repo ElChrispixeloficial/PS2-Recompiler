@@ -3,6 +3,7 @@
 #include <SLES/OpenSLES_Android.h>
 #include <cstdint>
 #include <cstddef>
+#include <mutex>
 
 constexpr int SPU2_VOICES       = 24;
 constexpr int SPU2_SAMPLE_RATE  = 48000;
@@ -47,6 +48,7 @@ public:
 
     SPU2_Voice voices[SPU2_VOICES];
     uint8_t    ram[2 * 1024 * 1024]; /* 2 MB SPU2 RAM */
+    std::mutex mtx; /* protects voices/ram from concurrent audio callback + CPU thread */
 
 private:
     void decode_adpcm_block(SPU2_Voice& v, int16_t out[28]);

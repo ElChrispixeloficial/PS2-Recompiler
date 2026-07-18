@@ -190,7 +190,10 @@ void SPU2_Core::mix(int16_t* output, int frames) {
 
 void AudioOutput::audio_callback(SLAndroidSimpleBufferQueueItf queue, void*) {
     int16_t* buf = audio_buffers[buf_idx];
-    spu2_state.mix(buf, SPU2_BUFFER_FRAMES);
+    {
+        std::lock_guard<std::mutex> lock(spu2_state.mtx);
+        spu2_state.mix(buf, SPU2_BUFFER_FRAMES);
+    }
     (*queue)->Enqueue(queue, buf, SPU2_BUFFER_FRAMES * SPU2_CHANNELS * sizeof(int16_t));
     buf_idx = (buf_idx + 1) % NUM_BUFFERS;
 }
@@ -209,6 +212,7 @@ void SPU2_Core::reset() {
 }
 
 uint16_t SPU2_Core::read_reg(uint32_t addr) {
+    std::lock_guard<std::mutex> lock(mtx);
     if (addr >= 0x1F801C00 && addr < 0x1F801C00 + SPU2_VOICES * 16) {
         uint32_t off   = addr - 0x1F801C00;
         uint32_t voice = off / 16;
@@ -244,6 +248,7 @@ uint16_t SPU2_Core::read_reg(uint32_t addr) {
 }
 
 void SPU2_Core::write_reg(uint32_t addr, uint16_t val) {
+    std::lock_guard<std::mutex> lock(mtx);
     if (addr >= 0x1F801C00 && addr < 0x1F801C00 + SPU2_VOICES * 16) {
         uint32_t off   = addr - 0x1F801C00;
         uint32_t voice = off / 16;
@@ -274,6 +279,7 @@ void SPU2_Core::write_reg(uint32_t addr, uint16_t val) {
 }
 
 void SPU2_Core::dma_write(const uint16_t* data, size_t words) {
+    std::lock_guard<std::mutex> lock(mtx);
     size_t bytes = words * 2;
     if (bytes > sizeof(ram)) bytes = sizeof(ram);
     memcpy(ram, data, bytes);

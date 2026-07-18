@@ -86,6 +86,16 @@ private:
     void*                    m_vb_mapped          = nullptr;
     uint32_t                 m_vb_vertex_offset   = 0;
 
+    /* Texturing */
+    VkSampler                m_sampler            = VK_NULL_HANDLE;
+    VkDescriptorSetLayout    m_ds_layout          = VK_NULL_HANDLE;
+    VkDescriptorPool         m_desc_pool          = VK_NULL_HANDLE;
+    VkImage                  m_white_image        = VK_NULL_HANDLE;
+    VkDeviceMemory           m_white_memory       = VK_NULL_HANDLE;
+    VkImageView              m_white_view         = VK_NULL_HANDLE;
+    VkDescriptorSet          m_white_ds           = VK_NULL_HANDLE;
+    uint32_t                 m_current_ds_idx     = 0;
+
     uint32_t                 m_gfx_family         = 0;
     uint32_t                 m_present_family     = 0;
     uint32_t                 m_current_image      = 0;
