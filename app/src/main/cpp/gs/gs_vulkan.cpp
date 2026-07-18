@@ -716,6 +716,10 @@ bool GS_Vulkan::create_texturing() {
 }
 
 bool GS_Vulkan::init(ANativeWindow* window) {
+    if (m_ready) {
+        LOGI("Vulkan already initialized, skipping re-init");
+        return true;
+    }
     LOGI("Initializing Vulkan...");
 
     if (!create_instance())          return false;

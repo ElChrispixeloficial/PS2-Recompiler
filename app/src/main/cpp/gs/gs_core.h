@@ -119,6 +119,8 @@ public:
 
     GS_State state;
 
+    GS_Vulkan* get_vulkan() { return vulkan.get(); }
+
 private:
     std::unique_ptr<GS_Vulkan> vulkan;
     void kick_primitive();

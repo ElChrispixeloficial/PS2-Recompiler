@@ -59,6 +59,7 @@ static constexpr int64_t EE_CYCLES = 4915200 / 60;
 static char g_debug_text[4096] = "Iniciando sistema...\n";
 static bool g_critical_alert = false;
 static bool g_bios_loaded = false;
+static int g_init_phase = 0;
 
 // Búfer temporal seguro para cargar la BIOS desde Android
 static uint8_t s_bios_temp[4 * 1024 * 1024];
@@ -79,8 +80,8 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
     __android_log_print(ANDROID_LOG_ERROR, TAG,
         "*** CRASH: %s at %p (PC=%p) ***", sig_name, fault_addr, pc);
     __android_log_print(ANDROID_LOG_ERROR, TAG,
-        "EE_PC=0x%08X g_running=%d g_paused=%d g_bios=%d",
-        g_ee ? g_ee->state.pc : 0, (int)g_running.load(), (int)g_paused.load(), (int)g_bios_loaded);
+        "EE_PC=0x%08X g_running=%d g_paused=%d g_bios=%d g_init_phase=%d",
+        g_ee ? g_ee->state.pc : 0, (int)g_running.load(), (int)g_paused.load(), (int)g_bios_loaded, g_init_phase);
     if (g_ee) {
         __android_log_print(ANDROID_LOG_ERROR, TAG,
             "EE SP=0x%08X RA=0x%08X",
@@ -118,6 +119,7 @@ static void full_cleanup() {
     g_last_gs_reg = g_last_gs_addr = 0;
     snprintf(g_debug_text, sizeof(g_debug_text), "Sistema apagado.");
     g_critical_alert = false;
+    g_init_phase = 0;
     g_jit_log_offset = 0;
     g_jit_log_buffer[0] = '\0';
 }
@@ -245,9 +247,14 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
 
     LOGI("[STEP] nativeLoadISO: file validated (%ld bytes)", fsize);
+    g_init_phase = 1;
+    LOGI("[DIAG] Phase 1: before full_cleanup, g_window=%p g_gs=%p g_ee=%p g_iop=%p",
+         (void*)g_window, (void*)g_gs.get(), (void*)g_ee.get(), (void*)g_iop.get());
     full_cleanup();
     LOGI("[STEP] nativeLoadISO: full_cleanup done");
 
+    g_init_phase = 2;
+    LOGI("[DIAG] Phase 2: creating EE_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating EE_Core...");
         g_ee  = std::make_unique<EE_Core>();
@@ -257,9 +264,11 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         return JNI_FALSE;
     }
     if (!g_ee || !g_ee->get_ram()) { LOGE("[STEP] nativeLoadISO: EE_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
-    LOGI("[STEP] nativeLoadISO: EE_Core created");
+    LOGI("[STEP] nativeLoadISO: EE_Core created, ptr=%p ram=%p", (void*)g_ee.get(), (void*)g_ee->get_ram());
     g_ee_core_ptr = g_ee.get();
 
+    g_init_phase = 3;
+    LOGI("[DIAG] Phase 3: creating GS_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating GS_Core...");
         g_gs  = std::make_unique<GS_Core>();
@@ -269,8 +278,10 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         return JNI_FALSE;
     }
     if (!g_gs) { LOGE("[STEP] nativeLoadISO: GS_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
-    LOGI("[STEP] nativeLoadISO: GS_Core created");
+    LOGI("[STEP] nativeLoadISO: GS_Core created, ptr=%p vulkan=%p", (void*)g_gs.get(), (void*)g_gs->get_vulkan());
 
+    g_init_phase = 4;
+    LOGI("[DIAG] Phase 4: creating IOP_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating IOP_Core...");
         g_iop = std::make_unique<IOP_Core>();
@@ -280,7 +291,10 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         return JNI_FALSE;
     }
     if (!g_iop) { LOGE("[STEP] nativeLoadISO: IOP_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
-    LOGI("[STEP] nativeLoadISO: IOP_Core created");
+    LOGI("[STEP] nativeLoadISO: IOP_Core created, ptr=%p", (void*)g_iop.get());
+
+    g_init_phase = 5;
+    LOGI("[DIAG] Phase 5: BIOS injection, g_bios_loaded=%d", (int)g_bios_loaded);
 
     if (g_bios_loaded) {
         g_ee->load_bios(s_bios_temp, 4 * 1024 * 1024);
@@ -295,6 +309,8 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
     g_iop->state.halted = false;
 
+    g_init_phase = 6;
+    LOGI("[DIAG] Phase 6: Vulkan init, g_window=%p g_gs=%p", (void*)g_window, (void*)g_gs.get());
     if (g_window && g_gs) {
         std::lock_guard<std::mutex> lock(g_vulkan_mutex);
         LOGI("[STEP] nativeLoadISO: init_vulkan (window present)");
@@ -304,8 +320,9 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         LOGI("[STEP] nativeLoadISO: skipping Vulkan (no window yet)");
     }
 
+    g_init_phase = 7;
+    LOGI("[DIAG] Phase 7: creating VU_Core + DMA_Controller");
     try {
-        LOGI("[STEP] nativeLoadISO: creating VU_Core + DMA_Controller...");
         g_vu  = std::make_unique<VU_Core>();
         g_dma = std::make_unique<DMA_Controller>();
     } catch (const std::bad_alloc&) {
@@ -318,11 +335,15 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     g_vu_core_ptr = g_vu.get();
     LOGI("[STEP] nativeLoadISO: VU_Core + DMA created");
 
+    g_init_phase = 8;
+    LOGI("[DIAG] Phase 8: PS2_BIOS::init, ee=%p iop=%p", (void*)g_ee.get(), (void*)g_iop.get());
     PS2_BIOS::init();
     PS2_BIOS::set_ee_core(g_ee.get());
     PS2_BIOS::set_iop_core(g_iop.get());
     LOGI("[STEP] nativeLoadISO: BIOS init + cores wired");
 
+    g_init_phase = 9;
+    LOGI("[DIAG] Phase 9: load_game");
     LOGI("[STEP] nativeLoadISO: load_game starting");
     if (!load_game(path)) {
         env->ReleaseStringUTFChars(jiso_path, path);
@@ -333,6 +354,8 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
     LOGI("[STEP] nativeLoadISO: load_game done");
 
+    g_init_phase = 10;
+    LOGI("[DIAG] Phase 10: SPU2_init");
     LOGI("[STEP] nativeLoadISO: SPU2_init starting");
     if (!SPU2_init()) {
         LOGE("[STEP] nativeLoadISO: SPU2_init FAILED (audio may not work)");
@@ -340,6 +363,8 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         LOGI("[STEP] nativeLoadISO: SPU2_init OK");
     }
 
+    g_init_phase = 11;
+    LOGI("[DIAG] Phase 11: nativeLoadISO complete");
     snprintf(g_debug_text, sizeof(g_debug_text), "[OK] Juego cargado. Esperando inicio de CPU...");
     LOGI("[STEP] nativeLoadISO: DONE SUCCESSFULLY");
     env->ReleaseStringUTFChars(jiso_path, path);
@@ -395,7 +420,8 @@ JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeS
 }
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeSurfaceChanged(JNIEnv*, jobject, jobject, jint w, jint h) { g_width=w; g_height=h; }
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeSurfaceDestroyed(JNIEnv*, jobject) { 
-    g_paused=true; 
+    g_paused=true;
+    std::lock_guard<std::mutex> lock(g_vulkan_mutex);
     if(g_window){ANativeWindow_release(g_window);g_window=nullptr;} 
 }
 
