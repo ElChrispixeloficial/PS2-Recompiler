@@ -499,8 +499,8 @@ enum VU_UpperOp : uint8_t {
     VU_OP_MSUBA   = 0x5C,
     VU_OP_OPMSUB  = 0x5E,
     VU_OP_OPMSULA = 0x5F,
-    VU_OP_CLIP    = 0x10,
-    VU_OP_ABS     = 0x1D,
+    VU_OP_CLIP    = 0x3F,
+    VU_OP_ABS     = 0x33,
     VU_OP_MADDA   = 0x20,
     VU_OP_MSUBA2  = 0x22,
 };
@@ -1210,7 +1210,7 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.store_vf(2, fd);
             break;
         }
-        case 0x10: // CLIP: clip test
+        case 0x3F: // CLIP: clip test
         {
             // CLIP: compare VF[fs].xyzw against VF[ft].x (broadcast w)
             // Set clip flags based on comparison against VF[ft].w repeated
@@ -1221,7 +1221,7 @@ uint8_t* vu_recompile_block(VU_Core& vu_core, int unit, uint32_t micro_pc) {
             e.call_fn((void*)vu_clip_helper);
             break;
         }
-        case 0x1D: // ABS: VF[fd] = abs(VF[fs]) with sign correction
+        case 0x33: // ABS: VF[fd] = abs(VF[fs]) with sign correction
         {
             e.load_vf(0, fs);
             e.fabs_v4s(2, 0);

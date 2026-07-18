@@ -212,7 +212,11 @@ void GS_Core::write_reg(uint8_t reg, uint64_t data) {
             break;
 
         case GS_SIGNAL:
+            state.signal_pending = true;
+            break;
         case GS_FINISH:
+            state.finish_pending = true;
+            break;
         case GS_LABEL:
             break;
 
@@ -260,7 +264,7 @@ void GS_Core::kick_primitive() {
     }
     if (needed == 0 || state.vertex_count < needed) return;
 
-    uint64_t xyoff = state.regs[GS_XYOFFSET_1 + state.context];
+    uint64_t xyoff = state.regs[GS_XYOFFSET_1];
     int32_t ox = (int32_t)((xyoff >> 0) & 0xFFFF);
     int32_t oy = (int32_t)((xyoff >> 16) & 0xFFFF);
 

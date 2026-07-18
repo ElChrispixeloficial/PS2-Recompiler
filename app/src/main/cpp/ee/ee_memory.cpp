@@ -2,6 +2,8 @@
 #include <cstring>
 #include <cstdio>
 #include "ee_memory.h"
+#include "ee_core.h"
+#include "../bus/memory_map.h"
 
 #define TAG "EE-MEM"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -11,10 +13,11 @@ uint8_t* g_ee_ram = nullptr;
 uint32_t g_ee_ram_size = 32*1024*1024;
 
 // El puntero g_bios ahora apuntará al array bios_rom de 4MB del EE_Core
-uint8_t* g_bios = nullptr; 
+uint8_t* g_bios = nullptr;
 
 uint8_t s_scratchpad[16*1024];
-extern uint32_t g_sif_buffer[];
+
+EE_Core* g_ee_core_ptr = nullptr;
 
 extern "C" void gs_write_reg(uint32_t addr, uint32_t val);
 extern "C" void gs_write_priv(uint32_t addr, uint32_t val);
@@ -37,7 +40,10 @@ extern "C" uint32_t ee_mem_read32(uint32_t addr) {
     }
     
     if ((phys & 0xFFFF0000) == 0x70000000) return *(uint32_t*)(s_scratchpad + (phys & 0x3FFF));
-    if ((phys >= 0x10000000 && phys < 0x10010000)) return g_sif_buffer[0]; 
+    if (phys >= 0x10000000 && phys < 0x10010000) {
+        if (g_ee_core_ptr) return hw_read32(*g_ee_core_ptr, phys);
+        return 0;
+    }
 
     return 0;
 }
@@ -63,8 +69,8 @@ extern "C" void ee_mem_write32(uint32_t addr, uint32_t val) {
         return;
     }
 
-    if ((phys >= 0x10000000 && phys < 0x10010000)) {
-        g_sif_buffer[0] = val;
+    if (phys >= 0x10000000 && phys < 0x10010000) {
+        if (g_ee_core_ptr) hw_write32(*g_ee_core_ptr, phys, val);
         return;
     }
 }
@@ -171,27 +177,45 @@ extern "C" uint32_t ee_ldr(uint32_t addr, uint64_t reg_val) {
 }
 
 // SWL/SWR: Store Word Left/Right
-extern "C" void ee_swl(uint32_t addr, uint32_t reg_val, uint32_t* mem_ptr) {
+extern "C" void ee_swl(uint32_t addr, uint32_t reg_val) {
+    uint32_t phys = vmap(addr);
+    uint32_t aligned = phys & ~3u;
     uint32_t shift = (addr & 3) * 8;
-    uint32_t mask = ((1u << shift) - 1);
-    *mem_ptr = (*mem_ptr & ~mask) | (reg_val >> shift);
+    uint32_t mask = shift ? ((1u << shift) - 1) : 0;
+    uint32_t mem_val = ee_mem_read32(aligned);
+    uint32_t result = (mem_val & ~mask) | (reg_val >> shift);
+    ee_mem_write32(aligned, result);
 }
-extern "C" void ee_swr(uint32_t addr, uint32_t reg_val, uint32_t* mem_ptr) {
+extern "C" void ee_swr(uint32_t addr, uint32_t reg_val) {
+    uint32_t phys = vmap(addr);
+    uint32_t aligned = phys & ~3u;
     uint32_t shift = (3 - (addr & 3)) * 8;
     uint32_t mask = ~((1u << shift) - 1);
-    *mem_ptr = (*mem_ptr & mask) | (reg_val << shift);
+    uint32_t mem_val = ee_mem_read32(aligned);
+    uint32_t result = (mem_val & mask) | (reg_val << shift);
+    ee_mem_write32(aligned, result);
 }
 
 // SDL/SDR: Store Doubleword Left/Right
-extern "C" void ee_sdl(uint32_t addr, uint64_t reg_val, uint64_t* mem_ptr) {
+extern "C" void ee_sdl(uint32_t addr, uint64_t reg_val) {
+    uint32_t phys = vmap(addr);
+    uint32_t aligned = phys & ~7u;
     uint32_t shift = (addr & 7) * 8;
-    if (shift == 0) { *mem_ptr = reg_val; return; }
+    uint64_t mem_val = uint64_t(ee_mem_read32(aligned)) | (uint64_t(ee_mem_read32(aligned + 4)) << 32);
+    if (shift == 0) { ee_mem_write32(aligned, (uint32_t)reg_val); ee_mem_write32(aligned + 4, (uint32_t)(reg_val >> 32)); return; }
     uint64_t mask = (1uLL << shift) - 1;
-    *mem_ptr = (*mem_ptr & mask) | (reg_val << shift);
+    uint64_t result = (mem_val & mask) | (reg_val << shift);
+    ee_mem_write32(aligned, (uint32_t)result);
+    ee_mem_write32(aligned + 4, (uint32_t)(result >> 32));
 }
-extern "C" void ee_sdr(uint32_t addr, uint64_t reg_val, uint64_t* mem_ptr) {
+extern "C" void ee_sdr(uint32_t addr, uint64_t reg_val) {
+    uint32_t phys = vmap(addr);
+    uint32_t aligned = phys & ~7u;
     uint32_t shift = (7 - (addr & 7)) * 8;
-    if (shift == 0) { *mem_ptr = reg_val; return; }
+    uint64_t mem_val = uint64_t(ee_mem_read32(aligned)) | (uint64_t(ee_mem_read32(aligned + 4)) << 32);
+    if (shift == 0) { ee_mem_write32(aligned, (uint32_t)reg_val); ee_mem_write32(aligned + 4, (uint32_t)(reg_val >> 32)); return; }
     uint64_t mask = ~((1uLL << shift) - 1);
-    *mem_ptr = (*mem_ptr & mask) | (reg_val >> (64 - shift));
+    uint64_t result = (mem_val & mask) | (reg_val >> (64 - shift));
+    ee_mem_write32(aligned, (uint32_t)result);
+    ee_mem_write32(aligned + 4, (uint32_t)(result >> 32));
 }

@@ -85,7 +85,11 @@ struct GS_State {
     int context = 0;
     
     // Variable temporal para ensamblar datos de 64 bits provenientes de la memoria del EE
-    uint32_t temp_reg_lo = 0; 
+    uint32_t temp_reg_lo = 0;
+
+    // Pending signal/finish flags (set by GS_SIGNAL / GS_FINISH writes)
+    bool signal_pending = false;
+    bool finish_pending = false;
 };
 
 class GS_Vulkan;

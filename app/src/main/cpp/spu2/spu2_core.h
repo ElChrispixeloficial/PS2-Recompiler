@@ -46,6 +46,8 @@ public:
     /* Mezcla SPU2_BUFFER_FRAMES muestras estéreo en out[] */
     void mix(int16_t* out, int frames);
 
+    void set_master_volume(uint16_t vol);
+
     SPU2_Voice voices[SPU2_VOICES];
     uint8_t    ram[2 * 1024 * 1024]; /* 2 MB SPU2 RAM */
     std::mutex mtx; /* protects voices/ram from concurrent audio callback + CPU thread */

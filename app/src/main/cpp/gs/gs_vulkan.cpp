@@ -240,12 +240,29 @@ bool GS_Vulkan::create_swapchain() {
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_phys_dev, m_surface, &caps);
     m_sc_extent = caps.currentExtent;
 
+    uint32_t fmt_count = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(m_phys_dev, m_surface, &fmt_count, nullptr);
+    std::vector<VkSurfaceFormatKHR> fmts(fmt_count);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(m_phys_dev, m_surface, &fmt_count, fmts.data());
+
+    VkFormat chosen_fmt = VK_FORMAT_R8G8B8A8_UNORM;
+    VkColorSpaceKHR chosen_cs = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    if (!fmts.empty()) {
+        chosen_fmt = fmts[0].format;
+        chosen_cs  = fmts[0].colorSpace;
+        for (auto& f : fmts) {
+            if (f.format == VK_FORMAT_R8G8B8A8_UNORM) { chosen_fmt = f.format; chosen_cs = f.colorSpace; break; }
+            if (f.format == VK_FORMAT_B8G8R8A8_UNORM) { chosen_fmt = f.format; chosen_cs = f.colorSpace; }
+        }
+    }
+    LOGI("Swapchain format: %d  colorspace: %d", (int)chosen_fmt, (int)chosen_cs);
+
     VkSwapchainCreateInfoKHR ci{};
     ci.sType            = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
     ci.surface          = m_surface;
     ci.minImageCount    = 2;
-    ci.imageFormat      = VK_FORMAT_B8G8R8A8_UNORM;
-    ci.imageColorSpace  = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    ci.imageFormat      = chosen_fmt;
+    ci.imageColorSpace  = chosen_cs;
     ci.imageExtent      = m_sc_extent;
     ci.imageArrayLayers = 1;
     ci.imageUsage       = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
@@ -269,7 +286,7 @@ bool GS_Vulkan::create_swapchain() {
         vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vi.image                           = m_sc_images[i];
         vi.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format                          = VK_FORMAT_B8G8R8A8_UNORM;
+        vi.format                          = chosen_fmt;
         vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
         vi.subresourceRange.levelCount     = 1;
         vi.subresourceRange.layerCount     = 1;
@@ -277,7 +294,7 @@ bool GS_Vulkan::create_swapchain() {
         if (rv != VK_SUCCESS) { LOGE("vkCreateImageView failed: %d", rv); return false; }
     }
 
-    m_sc_format = VK_FORMAT_B8G8R8A8_UNORM;
+    m_sc_format = chosen_fmt;
     LOGI("Swapchain: %ux%u, %u images", m_sc_extent.width, m_sc_extent.height, image_count);
     return true;
 }
@@ -592,7 +609,7 @@ bool GS_Vulkan::create_texturing() {
     VkImageViewCreateInfo vi{};
     vi.sType                           = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     vi.image                           = m_white_image;
-    vi.viewType                        = VK_IMAGE_TYPE_2D;
+    vi.viewType                        = VK_IMAGE_VIEW_TYPE_2D;
     vi.format                          = VK_FORMAT_R8G8B8A8_UNORM;
     vi.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
     vi.subresourceRange.levelCount     = 1;

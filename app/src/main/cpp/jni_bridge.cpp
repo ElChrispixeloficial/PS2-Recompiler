@@ -12,6 +12,7 @@
 #include "bios/bios_native.h"
 #include "homebrew/pr2_homebrew.h"
 #include "spu2/spu2_core.h"
+#include "bus/memory_map.h"
 
 #include <jni.h>
 #include <android/native_window_jni.h>
@@ -19,16 +20,23 @@
 #include <thread>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <new>
 #include <string>
 #include <cstring>
 #include <cstdio>
 #include <chrono>
+#include <csignal>
+#include <ucontext.h>
+#include <unistd.h>
 
 #define TAG "PS2-JNI"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 extern uint8_t* g_bios;
+extern EE_Core* g_ee_core_ptr;
+DMA_Controller* g_dma_ptr = nullptr;
 
 static std::unique_ptr<EE_Core>          g_ee;
 static std::unique_ptr<GS_Core>          g_gs;
@@ -39,6 +47,7 @@ static ANativeWindow* g_window = nullptr;
 static int g_width = 640, g_height = 448;
 static std::thread g_cpu_thread;
 static std::atomic<bool> g_running{false}, g_paused{false};
+static std::mutex g_vulkan_mutex;
 
 int g_gs_writes, g_gs_kicks, g_vulkan_draws, g_vulkan_presents, g_ee_iters;
 uint64_t g_last_gs_reg;
@@ -56,6 +65,28 @@ static uint8_t s_bios_temp[4 * 1024 * 1024];
 // Buffer para los logs del JIT
 static char g_jit_log_buffer[2048] = "";
 static int g_jit_log_offset = 0;
+
+static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
+    ucontext_t* uc = (ucontext_t*)uc_void;
+    void* fault_addr = info->si_addr;
+#ifdef __aarch64__
+    void* pc = (void*)uc->uc_mcontext.pc;
+#else
+    void* pc = (void*)uc->uc_mcontext.arm_pc;
+#endif
+    const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" : (sig == SIGABRT) ? "SIGABRT" : "UNKNOWN";
+    __android_log_print(ANDROID_LOG_ERROR, TAG,
+        "*** CRASH: %s at %p (PC=%p) ***", sig_name, fault_addr, pc);
+    __android_log_print(ANDROID_LOG_ERROR, TAG,
+        "EE_PC=0x%08X g_running=%d g_paused=%d g_bios=%d",
+        g_ee ? g_ee->state.pc : 0, (int)g_running.load(), (int)g_paused.load(), (int)g_bios_loaded);
+    if (g_ee) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG,
+            "EE SP=0x%08X RA=0x%08X",
+            (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31]);
+    }
+    _exit(128 + sig);
+}
 
 extern "C" void push_jit_log(const char* msg) {
     int len = strlen(msg);
@@ -78,6 +109,8 @@ static void full_cleanup() {
             g_cpu_thread.detach();
         }
     }
+    g_ee_core_ptr = nullptr;
+    g_dma_ptr = nullptr;
     g_dma.reset(); g_vu.reset(); g_iop.reset(); g_gs.reset(); g_ee.reset();
     g_gs_writes = g_gs_kicks = g_vulkan_draws = g_vulkan_presents = g_ee_iters = 0;
     g_last_gs_reg = g_last_gs_addr = 0;
@@ -105,6 +138,7 @@ static void cpu_loop() {
         
         g_ee->run_cycles(EE_CYCLES);
         g_iop->run_cycles(EE_CYCLES / 8);
+        hw_tick(EE_CYCLES);
         
         g_ee_iters++;
         
@@ -121,20 +155,20 @@ static void cpu_loop() {
                     uint32_t next_instr = g_ee->read32(current_ee_pc + 4);
                     
                     snprintf(g_debug_text, sizeof(g_debug_text),
-                        "🚨 ALERTA: BUCLE INFINITO DETECTADO\n\n"
+                        "[!] ALERTA: BUCLE INFINITO DETECTADO\n\n"
                         "Checkpoint: EE_ATASCADO_EN_PC\n"
                         "EE PC: 0x%08X\nIOP PC: 0x%08X\n\n"
-                        "Instrucción actual: 0x%08X\n"
-                        "Siguiente instrucción: 0x%08X\n\n"
+                        "Instruccion actual: 0x%08X\n"
+                        "Siguiente instruccion: 0x%08X\n\n"
                         "--- LOGS JIT IOP ---\n%s\n"
-                        "Solución: El JIT no sabe traducir esa instrucción.",
+                        "El JIT no sabe traducir esa instruccion.",
                         current_ee_pc, current_iop_pc, stuck_instr, next_instr, g_jit_log_buffer);
                 }
             } else {
                 stuck_counter = 0;
                 g_critical_alert = false;
                 snprintf(g_debug_text, sizeof(g_debug_text),
-                    "🟢 SISTEMA EN EJECUCIÓN\n\n"
+                    "[OK] SISTEMA EN EJECUCION\n\n"
                     "EE PC: 0x%08X | IOP PC: 0x%08X\n"
                     "EE iters: %d | GS wr: %d | Vk draw: %d\n"
                     "--- LOG JIT IOP ---\n%s",
@@ -183,9 +217,16 @@ extern "C" {
 
 JNIEXPORT jboolean JNICALL
 Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, jobject, jstring jiso_path) {
+    struct sigaction sa{};
+    sa.sa_sigaction = crash_signal_handler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGSEGV, &sa, nullptr);
+    sigaction(SIGABRT, &sa, nullptr);
+
     const char* path = env->GetStringUTFChars(jiso_path, nullptr);
-    
-    // Validate path before doing anything
+    LOGI("[STEP] nativeLoadISO: path obtained");
+
     FILE* test = fopen(path, "rb");
     if (!test) {
         LOGE("nativeLoadISO: ISO no accesible: %s", path);
@@ -200,50 +241,104 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         env->ReleaseStringUTFChars(jiso_path, path);
         return JNI_FALSE;
     }
-    
-    LOGI("nativeLoadISO: Cargando %s (%ld bytes)", path, fsize);
-    full_cleanup();
 
-    g_ee  = std::make_unique<EE_Core>();
-    g_gs  = std::make_unique<GS_Core>();
-    g_iop = std::make_unique<IOP_Core>();
-    
+    LOGI("[STEP] nativeLoadISO: file validated (%ld bytes)", fsize);
+    full_cleanup();
+    LOGI("[STEP] nativeLoadISO: full_cleanup done");
+
+    try {
+        LOGI("[STEP] nativeLoadISO: creating EE_Core...");
+        g_ee  = std::make_unique<EE_Core>();
+    } catch (const std::bad_alloc&) {
+        LOGE("[STEP] nativeLoadISO: EE_Core FAILED (out of memory)");
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    if (!g_ee || !g_ee->get_ram()) { LOGE("[STEP] nativeLoadISO: EE_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
+    LOGI("[STEP] nativeLoadISO: EE_Core created");
+    g_ee_core_ptr = g_ee.get();
+
+    try {
+        LOGI("[STEP] nativeLoadISO: creating GS_Core...");
+        g_gs  = std::make_unique<GS_Core>();
+    } catch (const std::bad_alloc&) {
+        LOGE("[STEP] nativeLoadISO: GS_Core FAILED (out of memory)");
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    if (!g_gs) { LOGE("[STEP] nativeLoadISO: GS_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
+    LOGI("[STEP] nativeLoadISO: GS_Core created");
+
+    try {
+        LOGI("[STEP] nativeLoadISO: creating IOP_Core...");
+        g_iop = std::make_unique<IOP_Core>();
+    } catch (const std::bad_alloc&) {
+        LOGE("[STEP] nativeLoadISO: IOP_Core FAILED (out of memory)");
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    if (!g_iop) { LOGE("[STEP] nativeLoadISO: IOP_Core null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
+    LOGI("[STEP] nativeLoadISO: IOP_Core created");
+
     if (g_bios_loaded) {
-        // 1. Cargar la BIOS en su propia ROM de 4MB dentro del EE_Core
         g_ee->load_bios(s_bios_temp, 4 * 1024 * 1024);
-        // 2. Inicializar la memoria global, pasándole el puntero a la ROM
         ee_mem_init(g_ee->get_ram(), EE_RAM_SIZE, g_ee->get_bios());
-        // 3. Copiar los primeros 2MB al IOP
         memcpy(g_iop->get_ram(), s_bios_temp, IOP_RAM_SIZE);
         g_iop->state.pc = 0xBFC00000;
-        LOGI("BIOS inyectada en ROM. Arranque orgánico activado.");
+        LOGI("[STEP] nativeLoadISO: BIOS injected, organic boot");
     } else {
         ee_mem_init(g_ee->get_ram(), EE_RAM_SIZE, nullptr);
         g_iop->state.pc = 0;
+        LOGI("[STEP] nativeLoadISO: No BIOS loaded, EE mem init done");
     }
-    g_iop->state.halted = false; 
-    
+    g_iop->state.halted = false;
+
     if (g_window && g_gs) {
-        if (g_gs->init_vulkan(g_window, g_width, g_height)) LOGI("Vulkan inicializado en nativeLoadISO.");
-        else LOGE("Vulkan falló en nativeLoadISO.");
+        std::lock_guard<std::mutex> lock(g_vulkan_mutex);
+        LOGI("[STEP] nativeLoadISO: init_vulkan (window present)");
+        if (g_gs->init_vulkan(g_window, g_width, g_height)) LOGI("[STEP] nativeLoadISO: Vulkan OK");
+        else LOGE("[STEP] nativeLoadISO: Vulkan FAILED (non-fatal)");
+    } else {
+        LOGI("[STEP] nativeLoadISO: skipping Vulkan (no window yet)");
     }
 
-    g_vu  = std::make_unique<VU_Core>();
-    g_dma = std::make_unique<DMA_Controller>();
+    try {
+        LOGI("[STEP] nativeLoadISO: creating VU_Core + DMA_Controller...");
+        g_vu  = std::make_unique<VU_Core>();
+        g_dma = std::make_unique<DMA_Controller>();
+    } catch (const std::bad_alloc&) {
+        LOGE("[STEP] nativeLoadISO: VU/DMA FAILED (out of memory)");
+        env->ReleaseStringUTFChars(jiso_path, path);
+        return JNI_FALSE;
+    }
+    if (!g_vu || !g_dma) { LOGE("[STEP] nativeLoadISO: VU/DMA null"); env->ReleaseStringUTFChars(jiso_path, path); return JNI_FALSE; }
+    g_dma_ptr = g_dma.get();
+    LOGI("[STEP] nativeLoadISO: VU_Core + DMA created");
 
     PS2_BIOS::init();
     PS2_BIOS::set_ee_core(g_ee.get());
     PS2_BIOS::set_iop_core(g_iop.get());
+    LOGI("[STEP] nativeLoadISO: BIOS init + cores wired");
 
+    LOGI("[STEP] nativeLoadISO: load_game starting");
     if (!load_game(path)) {
         env->ReleaseStringUTFChars(jiso_path, path);
         g_critical_alert = true;
-        snprintf(g_debug_text, sizeof(g_debug_text), "🚨 ALERTA: ERROR DE CARGA\n\nCheckpoint: ISO_LOAD_FAIL");
+        snprintf(g_debug_text, sizeof(g_debug_text), "[!] ERROR DE CARGA\n\nCheckpoint: ISO_LOAD_FAIL");
+        LOGE("[STEP] nativeLoadISO: load_game FAILED");
         return JNI_FALSE;
     }
+    LOGI("[STEP] nativeLoadISO: load_game done");
 
-    SPU2_init();
-    snprintf(g_debug_text, sizeof(g_debug_text), "✅ Juego cargado. Esperando inicio de CPU...");
+    LOGI("[STEP] nativeLoadISO: SPU2_init starting");
+    if (!SPU2_init()) {
+        LOGE("[STEP] nativeLoadISO: SPU2_init FAILED (audio may not work)");
+    } else {
+        LOGI("[STEP] nativeLoadISO: SPU2_init OK");
+    }
+
+    snprintf(g_debug_text, sizeof(g_debug_text), "[OK] Juego cargado. Esperando inicio de CPU...");
+    LOGI("[STEP] nativeLoadISO: DONE SUCCESSFULLY");
     env->ReleaseStringUTFChars(jiso_path, path);
     return JNI_TRUE;
 }
@@ -286,11 +381,13 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadBIOS(JNIEnv* env, jo
 }
 
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeSurfaceCreated(JNIEnv* env, jobject, jobject surface) {
+    std::lock_guard<std::mutex> lock(g_vulkan_mutex);
     if (g_window) ANativeWindow_release(g_window);
     g_window = ANativeWindow_fromSurface(env, surface);
     if (g_gs && g_window) {
-        if (g_gs->init_vulkan(g_window, g_width, g_height)) LOGI("Vulkan inicializado en surfaceCreated.");
-        else LOGE("Vulkan falló en surfaceCreated.");
+        LOGI("[STEP] nativeSurfaceCreated: init_vulkan");
+        if (g_gs->init_vulkan(g_window, g_width, g_height)) LOGI("[STEP] nativeSurfaceCreated: Vulkan OK");
+        else LOGE("[STEP] nativeSurfaceCreated: Vulkan FAILED");
     }
 }
 JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeSurfaceChanged(JNIEnv*, jobject, jobject, jint w, jint h) { g_width=w; g_height=h; }
@@ -316,7 +413,10 @@ JNIEXPORT void JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeS
 
 JNIEXPORT jint JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeGetFps(JNIEnv*, jobject) { return 60; }
 JNIEXPORT jstring JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeGetDebugInfo(JNIEnv* env, jobject) {
-    return env->NewStringUTF(g_debug_text);
+    static char safe_buf[4096];
+    memcpy(safe_buf, g_debug_text, sizeof(safe_buf) - 1);
+    safe_buf[sizeof(safe_buf) - 1] = '\0';
+    return env->NewStringUTF(safe_buf);
 }
 JNIEXPORT jboolean JNICALL Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeIsAlertActive(JNIEnv*, jobject) {
     return g_critical_alert ? JNI_TRUE : JNI_FALSE;

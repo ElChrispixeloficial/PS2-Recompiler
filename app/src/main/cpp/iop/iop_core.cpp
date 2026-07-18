@@ -75,6 +75,10 @@ IOP_Core::~IOP_Core() = default;
 
 void IOP_Core::run_cycles(int64_t cycles) {
     if (state.halted) return;
+    if (!cache || !cache->is_valid()) {
+        interpret_single_instruction();
+        return;
+    }
     int64_t cycles_run = 0;
     
     while (cycles_run < cycles) {

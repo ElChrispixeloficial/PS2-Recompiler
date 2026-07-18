@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
+#include "../bus/ee_hw.h"
 
 constexpr size_t EE_RAM_SIZE = 32 * 1024 * 1024;
 constexpr size_t BIOS_ROM_SIZE = 4 * 1024 * 1024;
@@ -47,6 +48,7 @@ public:
     size_t ram_size() { return EE_RAM_SIZE; }
     
     EE_State state;
+    EE_HW    hw;
 
     void interpret_single_instruction();
 

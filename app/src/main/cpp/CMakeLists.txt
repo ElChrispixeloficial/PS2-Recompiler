@@ -9,7 +9,6 @@ add_compile_options(
     -Wall -Wextra -Wno-unused-parameter
     -O2
     -ffast-math
-    -fno-exceptions
 )
 
 # ARM64 optimisations
@@ -51,10 +50,14 @@ set(SOURCES
     # Bus / DMAC
     bus/memory_map.cpp
     bus/dma_controller.cpp
+    bus/ee_hw.cpp
+    bus/sif_bus.cpp
 
     # ISO / ELF loader
     iso/iso_loader.cpp
-    iso/cdvd.cpp
+
+    # CDVD registers (complete)
+    bus/cdvd.cpp
 
     # BIOS
     bios/bios_native.cpp

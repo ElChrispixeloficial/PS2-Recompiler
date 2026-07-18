@@ -297,17 +297,37 @@ AudioOutput::~AudioOutput() { shutdown(); }
 bool AudioOutput::init(SPU2_Core* spu2) {
     m_spu2 = spu2;
 
+    LOGI("AudioOutput::init — creating engine");
     SLEngineOption opts[] = {{ SL_ENGINEOPTION_THREADSAFE, SL_BOOLEAN_TRUE }};
     if (slCreateEngine(&sl_engine_obj, 1, opts, 0, nullptr, nullptr) != SL_RESULT_SUCCESS) {
         LOGE("slCreateEngine failed");
         return false;
     }
-    (*sl_engine_obj)->Realize(sl_engine_obj, SL_BOOLEAN_FALSE);
-    (*sl_engine_obj)->GetInterface(sl_engine_obj, SL_IID_ENGINE, &sl_engine);
 
-    (*sl_engine)->CreateOutputMix(sl_engine, &sl_mix_obj, 0, nullptr, nullptr);
-    (*sl_mix_obj)->Realize(sl_mix_obj, SL_BOOLEAN_FALSE);
+    LOGI("AudioOutput::init — realizing engine");
+    if ((*sl_engine_obj)->Realize(sl_engine_obj, SL_BOOLEAN_FALSE) != SL_RESULT_SUCCESS) {
+        LOGE("Engine Realize failed");
+        return false;
+    }
 
+    LOGI("AudioOutput::init — getting engine interface");
+    if ((*sl_engine_obj)->GetInterface(sl_engine_obj, SL_IID_ENGINE, &sl_engine) != SL_RESULT_SUCCESS) {
+        LOGE("GetInterface ENGINE failed");
+        return false;
+    }
+
+    LOGI("AudioOutput::init — creating output mix");
+    if ((*sl_engine)->CreateOutputMix(sl_engine, &sl_mix_obj, 0, nullptr, nullptr) != SL_RESULT_SUCCESS) {
+        LOGE("CreateOutputMix failed");
+        return false;
+    }
+
+    if ((*sl_mix_obj)->Realize(sl_mix_obj, SL_BOOLEAN_FALSE) != SL_RESULT_SUCCESS) {
+        LOGE("OutputMix Realize failed");
+        return false;
+    }
+
+    LOGI("AudioOutput::init — creating audio player");
     SLDataLocator_AndroidSimpleBufferQueue bq_loc = {
         SL_DATALOCATOR_ANDROIDSIMPLEBUFFERQUEUE, (SLuint32)NUM_BUFFERS
     };
@@ -332,10 +352,23 @@ bool AudioOutput::init(SPU2_Core* spu2) {
         LOGE("CreateAudioPlayer failed");
         return false;
     }
-    (*sl_player_obj)->Realize(sl_player_obj, SL_BOOLEAN_FALSE);
-    (*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_PLAY, &sl_play);
-    (*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &sl_queue);
 
+    LOGI("AudioOutput::init — realizing player");
+    if ((*sl_player_obj)->Realize(sl_player_obj, SL_BOOLEAN_FALSE) != SL_RESULT_SUCCESS) {
+        LOGE("Player Realize failed");
+        return false;
+    }
+
+    if ((*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_PLAY, &sl_play) != SL_RESULT_SUCCESS) {
+        LOGE("GetInterface PLAY failed");
+        return false;
+    }
+    if ((*sl_player_obj)->GetInterface(sl_player_obj, SL_IID_ANDROIDSIMPLEBUFFERQUEUE, &sl_queue) != SL_RESULT_SUCCESS) {
+        LOGE("GetInterface BUFFERQUEUE failed");
+        return false;
+    }
+
+    LOGI("AudioOutput::init — registering callback and starting playback");
     (*sl_queue)->RegisterCallback(sl_queue, audio_callback, nullptr);
 
     for (int i = 0; i < NUM_BUFFERS; i++) {

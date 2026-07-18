@@ -130,9 +130,11 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         case 0x12: e.ldr32(9, 0, OFF_LO); e.store_gpr(9,rd); return false; // MFLO
         case 0x13: e.load_gpr(9,rs); e.str32(9, 0, OFF_LO); return false; // MTLO
         case 0x18: { // MULT: {HI,LO} = rs * rt (signed)
-            e.load_gpr(9,rs); e.load_gpr(10,rt); e.sxtw(19,9); e.sxtw(20,10);
-            e.smulh(11,19,20); e.mul(12,9,10);
-            e.str32(12, 0, OFF_LO); e.str32(11, 0, OFF_HI);
+            e.load_gpr(9,rs); e.load_gpr(10,rt);
+            e.smull(18,9,10); // X18 = sign_extend(W9)*sign_extend(W10) (64-bit)
+            e.str32(18, 0, OFF_LO); // LO = low 32
+            e.u32(0xD3607E4Bu); // LSR X11, X18, #32
+            e.str32(11, 0, OFF_HI); // HI = high 32
             return false;
         }
         case 0x19: { // MULTU

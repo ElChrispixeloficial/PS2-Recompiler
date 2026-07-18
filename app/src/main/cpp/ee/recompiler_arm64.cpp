@@ -460,7 +460,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
     case OP_LQ: {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
-        e.mov_imm64(10, (uintptr_t)&state.gpr_lo[rt]);
+        e.mov_imm32(10, gpr_off(rt)); e.add64(10, 19, 10);
         e.mov_reg64(1, 10);
         e.call((void*)ee_mem_read128_wrapper);
         e.ldr64(9, 19, gpr_off(rt));
@@ -470,7 +470,7 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
     case OP_SQ: {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
-        e.mov_imm64(10, (uintptr_t)&state.gpr_lo[rt]);
+        e.mov_imm32(10, gpr_off(rt)); e.add64(10, 19, 10);
         e.mov_reg64(1, 10);
         e.call((void*)ee_mem_write128_wrapper);
         return false;
@@ -497,8 +497,6 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
         e.load_gpr(1, rt);
-        e.mov_reg64(2, 9); e.and64(2, 2, 31); e.sub64(2, 9, 2); e.ldr64(2, 2, 0);
-        e.mov_reg64(3, 2);
         e.call((void*)ee_swl);
         return false;
     }
@@ -506,8 +504,6 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
         e.load_gpr(1, rt);
-        e.mov_reg64(2, 9); e.and64(2, 2, 31); e.sub64(2, 9, 2); e.ldr64(2, 2, 0);
-        e.mov_reg64(3, 2);
         e.call((void*)ee_swr);
         return false;
     }
@@ -533,8 +529,6 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
         e.load_gpr(1, rt);
-        e.mov_reg64(2, 9); e.and64(2, 2, 31); e.sub64(2, 9, 2); e.ldr64(2, 2, 0);
-        e.mov_reg64(3, 2);
         e.call((void*)ee_sdl);
         return false;
     }
@@ -542,8 +536,6 @@ static bool emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         e.load_gpr(9, rs); e.mov_imm64(10, uint64_t(int64_t(imm))); e.add64(9, 9, 10);
         e.mov_reg64(0, 9);
         e.load_gpr(1, rt);
-        e.mov_reg64(2, 9); e.and64(2, 2, 31); e.sub64(2, 9, 2); e.ldr64(2, 2, 0);
-        e.mov_reg64(3, 2);
         e.call((void*)ee_sdr);
         return false;
     }

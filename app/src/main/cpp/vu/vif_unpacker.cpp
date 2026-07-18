@@ -95,7 +95,7 @@ bool VIF_Unpacker::feed_packet(uint32_t tag, const uint32_t* data, int qwc, VU_C
         case 0x35: // MSCNT - Micro Subroutine Call (decrement counter)
             LOGD("VIF%d MSCNT", vif_idx);
             if (!vu.is_running(vif_idx)) {
-                uint32_t addr = vu.vi[vif_idx == 0 ? 0 : 1][15]; // VI15 = TOP used as pc hint
+                uint32_t addr = (vif_idx == 0 ? vu.vu0 : vu.vu1).vi[15]; // VI15 = TOP used as pc hint
                 vu.start(vif_idx, addr);
             }
             break;
@@ -210,7 +210,8 @@ void VIF_Unpacker::unpack_data(uint32_t cmd, const uint32_t* data, int size, VU_
     uint32_t mode = cmd & 0x1F;
     int vu_num = vif_idx;
     uint8_t* mem = vu.get_data_mem(vu_num);
-    int16_t* vi_regs = vu.vi[vu_num];
+    VU_State& vs = vu_num ? vu.vu1 : vu.vu0;
+    int16_t* vi_regs = vs.vi;
     uint32_t& top_reg = top[vif_idx];
 
     LOGD("VIF%d UNPACK mode=0x%02X nloop_cmd=0x%02X size=%d top=%u",
@@ -326,7 +327,7 @@ void VIF_Unpacker::unpack_data(uint32_t cmd, const uint32_t* data, int size, VU_
                     uint32_t w0 = data[data_pos++];
                     int32_t v0 = sign_extend_12(w0 & 0xFFF);
                     int32_t v1 = sign_extend_12((w0 >> 12) & 0xFFF);
-                    int32_t v2 = sign_extend_12((w0 >> 24) & 0xF | ((data_pos < size ? data[data_pos] : 0) & 0xFF) << 4);
+                    int32_t v2 = sign_extend_12(((w0 >> 24) & 0xF) | (((data_pos < size ? data[data_pos] : 0) & 0xFF) << 4));
                     result[0] = static_cast<uint32_t>(v0);
                     result[1] = static_cast<uint32_t>(v1);
                     result[2] = static_cast<uint32_t>(v2);

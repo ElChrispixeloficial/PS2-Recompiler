@@ -18,6 +18,8 @@ struct PadState {
     // Pressure-sensitive buttons (0-255) for DualShock 2
     uint8_t pressure_cross, pressure_circle, pressure_square, pressure_triangle;
     uint8_t pressure_l1, pressure_r1, pressure_l2, pressure_r2;
+    uint8_t pressure_right_x, pressure_right_y;
+    uint8_t pressure_left_x, pressure_left_y;
 };
 
 class DualShock {

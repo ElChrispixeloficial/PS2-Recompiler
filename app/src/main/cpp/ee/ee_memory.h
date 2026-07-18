@@ -21,8 +21,8 @@ extern "C" {
     uint32_t ee_lwr(uint32_t addr, uint32_t mem_val);
     uint32_t ee_ldl(uint32_t addr, uint64_t mem_val);
     uint32_t ee_ldr(uint32_t addr, uint64_t mem_val);
-    void     ee_swl(uint32_t addr, uint32_t reg_val, uint32_t* mem_ptr);
-    void     ee_swr(uint32_t addr, uint32_t reg_val, uint32_t* mem_ptr);
-    void     ee_sdl(uint32_t addr, uint64_t reg_val, uint64_t* mem_ptr);
-    void     ee_sdr(uint32_t addr, uint64_t reg_val, uint64_t* mem_ptr);
+    void     ee_swl(uint32_t addr, uint32_t reg_val);
+    void     ee_swr(uint32_t addr, uint32_t reg_val);
+    void     ee_sdl(uint32_t addr, uint64_t reg_val);
+    void     ee_sdr(uint32_t addr, uint64_t reg_val);
 }

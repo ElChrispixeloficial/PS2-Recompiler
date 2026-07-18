@@ -95,8 +95,8 @@ A PlayStation 2 emulator for Android that **recompiles** MIPS R5900/IOP R3000 ma
   <text x="400" y="215" text-anchor="middle" font-family="Arial" font-size="13" fill="#9b59b6" font-weight="bold">ARM64 OPTIMIZED</text>
   <text x="400" y="240" text-anchor="middle" font-family="monospace" font-size="11" fill="#00d2ff">NEON SIMD, SVE</text>
   <text x="400" y="260" text-anchor="middle" font-family="monospace" font-size="11" fill="#888">armv8-a+simd, O3 -ffast-math</text>
-  <text x="400" y="285" text-anchor="middle" font-family="Arial" font-size="10" fill="#666">ARM32 fallback with NEON</text>
-  <text x="400" y="300" text-anchor="middle" font-family="Arial" font-size="10" fill="#666">support for older devices</text>
+  <text x="400" y="285" text-anchor="middle" font-family="Arial" font-size="10" fill="#666">Branch prediction, inline cache</text>
+  <text x="400" y="300" text-anchor="middle" font-family="Arial" font-size="10" fill="#666">with O3 and fast-math opts</text>
 
   <!-- Card 6: Android -->
   <rect x="540" y="180" width="240" height="140" rx="12" fill="url(#card-bg)" stroke="#3498db" stroke-width="1.5"/>
@@ -162,7 +162,7 @@ A PlayStation 2 emulator for Android that **recompiles** MIPS R5900/IOP R3000 ma
   <!-- IOP Core -->
   <rect x="80" y="380" width="240" height="60" rx="10" fill="url(#module-bg)" stroke="#e67e22" stroke-width="2"/>
   <text x="200" y="405" text-anchor="middle" font-family="monospace" font-size="12" fill="#e67e22" font-weight="bold">IOP Core (R3000A)</text>
-  <text x="200" y="422" text-anchor="middle" font-family="Arial" font-size="10" fill="#888">36 MHz — Interpreter</text>
+  <text x="200" y="422" text-anchor="middle" font-family="Arial" font-size="10" fill="#888">36 MHz — ARM64 JIT</text>
 
   <!-- Arrow: IOP → SPU2 -->
   <line x1="200" y1="440" x2="200" y2="470" stroke="#00d2ff" stroke-width="2" marker-end="url(#arrow)"/>
@@ -197,14 +197,14 @@ A PlayStation 2 emulator for Android that **recompiles** MIPS R5900/IOP R3000 ma
   <text x="620" y="352" text-anchor="middle" font-family="Arial" font-size="10" fill="#888">Android SurfaceView</text>
 
   <!-- Legend -->
-  <rect x="500" y="390" width="280" height="110" rx="8" fill="none" stroke="#333" stroke-width="1"/>
-  <text x="640" y="412" text-anchor="middle" font-family="Arial" font-size="11" fill="#888">Legend</text>
-  <line x1="520" y1="430" x2="550" y2="430" stroke="#00d2ff" stroke-width="2"/>
-  <text x="560" y="434" font-family="Arial" font-size="10" fill="#888">Data flow</text>
-  <line x1="520" y1="455" x2="550" y2="455" stroke="#f39c12" stroke-width="2" stroke-dasharray="6,3"/>
-  <text x="560" y="459" font-family="Arial" font-size="10" fill="#888">GIF packets</text>
-  <rect x="520" y="472" width="20" height="12" rx="3" fill="#0d0d20" stroke="#333" stroke-width="1"/>
-  <text x="560" y="483" font-family="Arial" font-size="10" fill="#888">Internal module</text>
+  <rect x="500" y="210" width="280" height="110" rx="8" fill="none" stroke="#333" stroke-width="1"/>
+  <text x="640" y="232" text-anchor="middle" font-family="Arial" font-size="11" fill="#888">Legend</text>
+  <line x1="520" y1="250" x2="550" y2="250" stroke="#00d2ff" stroke-width="2"/>
+  <text x="560" y="254" font-family="Arial" font-size="10" fill="#888">Data flow</text>
+  <line x1="520" y1="275" x2="550" y2="275" stroke="#f39c12" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="560" y="279" font-family="Arial" font-size="10" fill="#888">GIF packets</text>
+  <rect x="520" y="292" width="20" height="12" rx="3" fill="#0d0d20" stroke="#333" stroke-width="1"/>
+  <text x="560" y="303" font-family="Arial" font-size="10" fill="#888">Internal module</text>
 </svg>
 
 ---
@@ -214,7 +214,7 @@ A PlayStation 2 emulator for Android that **recompiles** MIPS R5900/IOP R3000 ma
 | Requirement | Details |
 |-------------|---------|
 | **Android** | 8.0+ (API 26) with Vulkan 1.1 |
-| **Architecture** | ARM64 (arm64-v8a) or ARM32 (armeabi-v7a) |
+| **Architecture** | ARM64 (arm64-v8a) only |
 | **NDK** | r25c or newer |
 | **CMake** | 3.22+ |
 | **Disk Space** | ~50MB APK + game ISOs |
@@ -316,7 +316,7 @@ PS2-Recompiler/
 ## Implementation Status
 
 <!-- Status SVG -->
-<svg width="800" height="400" xmlns="http://www.w3.org/2000/svg">
+<svg width="800" height="440" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="done" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" style="stop-color:#1a3a1a"/>
@@ -336,7 +336,7 @@ PS2-Recompiler/
   <text x="400" y="30" text-anchor="middle" font-family="Arial" font-size="18" fill="white" font-weight="bold">Implementation Status</text>
 
   <!-- Done items -->
-  <rect x="20" y="50" width="380" height="420" rx="10" fill="url(#done)" stroke="#2ecc71" stroke-width="1.5"/>
+  <rect x="20" y="50" width="380" height="460" rx="10" fill="url(#done)" stroke="#2ecc71" stroke-width="1.5"/>
   <text x="210" y="75" text-anchor="middle" font-family="Arial" font-size="13" fill="#2ecc71" font-weight="bold">✓ COMPLETED</text>
   
   <circle cx="45" cy="100" r="6" fill="#2ecc71"/>
@@ -393,27 +393,33 @@ PS2-Recompiler/
   <circle cx="45" cy="440" r="6" fill="#2ecc71"/>
   <text x="60" y="444" font-family="monospace" font-size="11" fill="#aaa">ISO Loader (ISO 9660 + ELF)</text>
 
+  <circle cx="45" cy="460" r="6" fill="#2ecc71"/>
+  <text x="60" y="464" font-family="monospace" font-size="11" fill="#aaa">EE Timers (6 ch, free-run/target)</text>
+
+  <circle cx="45" cy="480" r="6" fill="#2ecc71"/>
+  <text x="60" y="484" font-family="monospace" font-size="11" fill="#aaa">INTC (interrupt mask/status)</text>
+
+  <circle cx="45" cy="500" r="6" fill="#2ecc71"/>
+  <text x="60" y="504" font-family="monospace" font-size="11" fill="#aaa">CDVD (N-Command + S-Command + status)</text>
+
+  <circle cx="45" cy="520" r="6" fill="#2ecc71"/>
+  <text x="60" y="524" font-family="monospace" font-size="11" fill="#aaa">SIF Bus (EE↔IOP communication)</text>
+
+  <circle cx="45" cy="540" r="6" fill="#2ecc71"/>
+  <text x="60" y="544" font-family="monospace" font-size="11" fill="#aaa">MECNIFO (memory error controller)</text>
+
   <!-- Todo items -->
-  <rect x="420" y="50" width="370" height="180" rx="10" fill="url(#todo)" stroke="#e74c3c" stroke-width="1.5"/>
+  <rect x="420" y="50" width="370" height="140" rx="10" fill="url(#todo)" stroke="#e74c3c" stroke-width="1.5"/>
   <text x="605" y="75" text-anchor="middle" font-family="Arial" font-size="13" fill="#e74c3c" font-weight="bold">⏳ REMAINING</text>
 
   <circle cx="445" cy="100" r="6" fill="#e74c3c"/>
-  <text x="460" y="104" font-family="monospace" font-size="11" fill="#aaa">LWL/LWR/SWL/SWR accuracy</text>
+  <text x="460" y="104" font-family="monospace" font-size="11" fill="#aaa">Branch-Likely delay slots (BEQL/BNEL)</text>
 
   <circle cx="445" cy="120" r="6" fill="#e74c3c"/>
-  <text x="460" y="124" font-family="monospace" font-size="11" fill="#aaa">Branch-Likely delay slots</text>
+  <text x="460" y="124" font-family="monospace" font-size="11" fill="#aaa">GS BITBLT complete (TRXPOS)</text>
 
   <circle cx="445" cy="140" r="6" fill="#e74c3c"/>
-  <text x="460" y="144" font-family="monospace" font-size="11" fill="#aaa">VIF XGKICK DMA to GIF</text>
-
-  <circle cx="445" cy="160" r="6" fill="#e74c3c"/>
-  <text x="460" y="164" font-family="monospace" font-size="11" fill="#aaa">GS BITBLT complete (TRXPOS)</text>
-
-  <circle cx="445" cy="180" r="6" fill="#e74c3c"/>
-  <text x="460" y="184" font-family="monospace" font-size="11" fill="#aaa">Timer/INTC hardware registers</text>
-
-  <circle cx="445" cy="200" r="6" fill="#e74c3c"/>
-  <text x="460" y="204" font-family="monospace" font-size="11" fill="#aaa">CDVD register emulation</text>
+  <text x="460" y="144" font-family="monospace" font-size="11" fill="#aaa">VIF XGKICK proper GIF integration</text>
 
   <!-- Legend -->
   <circle cx="100" cy="245" r="5" fill="#2ecc71"/>
@@ -437,13 +443,16 @@ PS2-Recompiler/
 | Software Raster | ✅ Done | PSM32/24/16/8/4 decode + alpha/depth test |
 | ISO Loader | ✅ Done | ISO 9660 + ELF parsing |
 | DMA Controller | ✅ Done | GIF channel + chain mode |
+| EE Timers | ✅ Done | 6 channels, free-run + target modes |
+| INTC | ✅ Done | Interrupt controller with mask/status |
+| CDVD | ✅ Done | N-Command + S-Command + drive status |
+| SIF Bus | ✅ Done | EE↔IOP communication |
+| MECNIFO | ✅ Done | Memory error controller |
 
 ### Remaining Work
-1. **LWL/LWR/SWL/SWR** — Unaligned memory access accuracy
-2. **Branch-Likely** — Proper delay-slot skipping for BEQL/BNEL
-3. **VIF XGKICK** — DMA transfer from VU1 to GIF
-4. **Timer/INTC** — Hardware timer and interrupt controller registers
-5. **CDVD** — CD/DVD register emulation for disc games
+1. **Branch-Likely** — Proper delay-slot skipping for BEQL/BNEL
+2. **GS BITBLT** — TRXPOS complete implementation
+3. **VIF XGKICK** — Proper integration with GIF pipeline
 
 ---
 

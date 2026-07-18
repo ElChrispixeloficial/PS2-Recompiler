@@ -183,7 +183,7 @@ class RuntimeActivity : AppCompatActivity() {
 
         binding.layoutLoading.visibility = View.VISIBLE
         binding.tvLoadingStatus.text = getString(R.string.game_loading)
-        binding.tvLoadingDetail.text = isoPath.substringAfterLast('/')
+        binding.tvLoadingDetail.text = try { java.net.URLDecoder.decode(isoPath.substringAfterLast('/'), "UTF-8") } catch (_: Exception) { isoPath.substringAfterLast('/') }
         
         lifecycleScope.launch(Dispatchers.IO) {
             // 1. Cargar la BIOS pasada desde MainActivity
@@ -203,9 +203,9 @@ class RuntimeActivity : AppCompatActivity() {
                     binding.layoutLoading.visibility = View.GONE
                     isLoaded = true; nativeResume(); fpsLoop(); showHud()
                     if (!biosLoaded) {
-                        Snackbar.make(binding.root, "⚠️ Falta BIOS oficial. Modo HLE activado.", Snackbar.LENGTH_LONG).show()
+                        Snackbar.make(binding.root, "Falta BIOS oficial. Modo HLE activado.", Snackbar.LENGTH_LONG).show()
                     } else {
-                        Snackbar.make(binding.root, "✅ BIOS oficial cargada. Arranque orgánico.", Snackbar.LENGTH_SHORT).show()
+                        Snackbar.make(binding.root, "BIOS oficial cargada. Arranque organico.", Snackbar.LENGTH_SHORT).show()
                     }
                 } else {
                     binding.progressLoading.visibility = View.GONE

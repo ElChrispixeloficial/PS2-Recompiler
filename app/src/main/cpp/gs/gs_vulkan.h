@@ -48,6 +48,7 @@ private:
     bool create_command_buffers();
     bool create_sync_objects();
     bool create_vertex_buffer(VkDeviceSize size);
+    bool create_texturing();
 
     VkShaderModule create_shader_module(const uint32_t* code, size_t size_bytes);
     uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags props);

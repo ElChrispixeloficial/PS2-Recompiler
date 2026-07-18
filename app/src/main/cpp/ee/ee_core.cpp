@@ -24,6 +24,7 @@ EE_Core::EE_Core()
     ee_mem_init(ee_ram.get(), EE_RAM_SIZE, bios_rom.get());
     
     memset(&state, 0, sizeof(state));
+    ee_hw_init(hw);
     state.pc = 0xBFC00000u;  // Reset vector: inicio de BIOS
     LOGI("EE Core iniciado. RAM: %zu MB", EE_RAM_SIZE / (1024*1024));
 }
@@ -93,6 +94,10 @@ void EE_Core::interpret_single_instruction() {
 
 // ─── Bucle de ejecución principal ─────────────────────────────────────────────
 void EE_Core::run_cycles(int64_t cycles) {
+    if (!cache || !cache->is_valid() || !ee_ram) {
+        state.halted = true;
+        return;
+    }
     if (!recompiler) {
         recompiler = std::make_unique<EE_Recompiler>(*cache, state, ee_ram.get());
     }
@@ -163,7 +168,8 @@ uint32_t EE_Core::read32(uint32_t addr) {
 void EE_Core::write32(uint32_t addr, uint32_t val) {
     uint32_t phys = addr & 0x1FFFFFFFu;
     if (phys < EE_RAM_SIZE) {
-        cache->invalidate_range(phys, phys + 4);
+        if (cache && cache->is_valid())
+            cache->invalidate_range(phys, phys + 4);
         *reinterpret_cast<uint32_t*>(ee_ram.get() + phys) = val;
     }
 }
