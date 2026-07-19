@@ -722,18 +722,31 @@ bool GS_Vulkan::init(ANativeWindow* window) {
     }
     LOGI("Initializing Vulkan...");
 
+    LOGI("[VK-INIT] Step 1: create_instance...");
     if (!create_instance())          return false;
+    LOGI("[VK-INIT] Step 2: create_surface(window=%p)...", window);
     if (!create_surface(window))     return false;
+    LOGI("[VK-INIT] Step 3: pick_physical_device...");
     if (!pick_physical_device())     return false;
+    LOGI("[VK-INIT] Step 4: create_logical_device...");
     if (!create_logical_device())    return false;
+    LOGI("[VK-INIT] Step 5: create_swapchain...");
     if (!create_swapchain())         return false;
+    LOGI("[VK-INIT] Step 6: create_render_pass...");
     if (!create_render_pass())       return false;
+    LOGI("[VK-INIT] Step 7: create_texturing...");
     if (!create_texturing())         return false;
+    LOGI("[VK-INIT] Step 8: create_pipeline...");
     if (!create_pipeline())          return false;
+    LOGI("[VK-INIT] Step 9: create_framebuffers...");
     if (!create_framebuffers())      return false;
+    LOGI("[VK-INIT] Step 10: create_command_pool...");
     if (!create_command_pool())      return false;
+    LOGI("[VK-INIT] Step 11: create_command_buffers...");
     if (!create_command_buffers())   return false;
+    LOGI("[VK-INIT] Step 12: create_sync_objects...");
     if (!create_sync_objects())      return false;
+    LOGI("[VK-INIT] Step 13: create_vertex_buffer...");
     if (!create_vertex_buffer(4 * 1024 * 1024)) return false;
 
     m_ready = true;

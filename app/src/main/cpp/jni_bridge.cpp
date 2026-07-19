@@ -73,10 +73,48 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
     void* fault_addr = info->si_addr;
 #ifdef __aarch64__
     void* pc = (void*)uc->uc_mcontext.pc;
+    void* sp = (void*)uc->uc_mcontext.sp;
+    void* lr = (void*)uc->uc_mcontext.regs[30];
 #else
     void* pc = (void*)uc->uc_mcontext.arm_pc;
+    void* sp = (void*)uc->uc_mcontext.arm_sp;
+    void* lr = (void*)uc->uc_mcontext.arm_lr;
 #endif
     const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" : (sig == SIGABRT) ? "SIGABRT" : "UNKNOWN";
+
+    const char* crash_log_path = "/data/data/com.chrispixel.ps2recompiler/files/crash.log";
+    FILE* f = fopen(crash_log_path, "w");
+    if (f) {
+        fprintf(f, "=== CRASH LOG ===\n");
+        fprintf(f, "Signal: %s (%d)\n", sig_name, sig);
+        fprintf(f, "Fault address: %p\n", fault_addr);
+        fprintf(f, "PC: %p\n", pc);
+        fprintf(f, "SP: %p  LR: %p\n", sp, lr);
+        fprintf(f, "g_init_phase: %d\n", g_init_phase);
+        fprintf(f, "g_bios_loaded: %d\n", (int)g_bios_loaded);
+        fprintf(f, "g_running: %d  g_paused: %d\n", (int)g_running.load(), (int)g_paused.load());
+        fprintf(f, "g_window: %p\n", (void*)g_window);
+        fprintf(f, "g_gs: %p\n", (void*)g_gs.get());
+        fprintf(f, "g_ee: %p\n", (void*)g_ee.get());
+        fprintf(f, "g_iop: %p\n", (void*)g_iop.get());
+        fprintf(f, "g_vu: %p\n", (void*)g_vu.get());
+        fprintf(f, "g_dma: %p\n", (void*)g_dma.get());
+        fprintf(f, "g_ee_core_ptr: %p\n", (void*)g_ee_core_ptr);
+        if (g_ee) {
+            fprintf(f, "EE PC=0x%08X SP=0x%08X RA=0x%08X\n",
+                g_ee->state.pc, (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31]);
+        }
+        if (g_gs) {
+            fprintf(f, "GS vulkan ptr: %p\n", (void*)g_gs->get_vulkan());
+        }
+        fprintf(f, "=== END CRASH LOG ===\n");
+        fclose(f);
+    }
+
+    snprintf(g_debug_text, sizeof(g_debug_text),
+        "CRASH: %s at %p\nPC=%p SP=%p\nPhase=%d Bios=%d\nWindow=%p GS=%p",
+        sig_name, fault_addr, pc, sp, g_init_phase, (int)g_bios_loaded, (void*)g_window, (void*)g_gs.get());
+
     __android_log_print(ANDROID_LOG_ERROR, TAG,
         "*** CRASH: %s at %p (PC=%p) ***", sig_name, fault_addr, pc);
     __android_log_print(ANDROID_LOG_ERROR, TAG,
@@ -248,12 +286,14 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
 
     LOGI("[STEP] nativeLoadISO: file validated (%ld bytes)", fsize);
     g_init_phase = 1;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 1: cleanup\nWindow=%p GS=%p", (void*)g_window, (void*)g_gs.get());
     LOGI("[DIAG] Phase 1: before full_cleanup, g_window=%p g_gs=%p g_ee=%p g_iop=%p",
          (void*)g_window, (void*)g_gs.get(), (void*)g_ee.get(), (void*)g_iop.get());
     full_cleanup();
     LOGI("[STEP] nativeLoadISO: full_cleanup done");
 
     g_init_phase = 2;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 2: EE_Core");
     LOGI("[DIAG] Phase 2: creating EE_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating EE_Core...");
@@ -268,6 +308,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     g_ee_core_ptr = g_ee.get();
 
     g_init_phase = 3;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 3: GS_Core");
     LOGI("[DIAG] Phase 3: creating GS_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating GS_Core...");
@@ -281,6 +322,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     LOGI("[STEP] nativeLoadISO: GS_Core created, ptr=%p vulkan=%p", (void*)g_gs.get(), (void*)g_gs->get_vulkan());
 
     g_init_phase = 4;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 4: IOP_Core");
     LOGI("[DIAG] Phase 4: creating IOP_Core");
     try {
         LOGI("[STEP] nativeLoadISO: creating IOP_Core...");
@@ -294,6 +336,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     LOGI("[STEP] nativeLoadISO: IOP_Core created, ptr=%p", (void*)g_iop.get());
 
     g_init_phase = 5;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 5: BIOS inject\nbios=%d", (int)g_bios_loaded);
     LOGI("[DIAG] Phase 5: BIOS injection, g_bios_loaded=%d", (int)g_bios_loaded);
 
     if (g_bios_loaded) {
@@ -310,6 +353,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     g_iop->state.halted = false;
 
     g_init_phase = 6;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 6: Vulkan\nwin=%p gs=%p", (void*)g_window, (void*)g_gs.get());
     LOGI("[DIAG] Phase 6: Vulkan init, g_window=%p g_gs=%p", (void*)g_window, (void*)g_gs.get());
     if (g_window && g_gs) {
         std::lock_guard<std::mutex> lock(g_vulkan_mutex);
@@ -321,6 +365,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
 
     g_init_phase = 7;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 7: VU+DMA");
     LOGI("[DIAG] Phase 7: creating VU_Core + DMA_Controller");
     try {
         g_vu  = std::make_unique<VU_Core>();
@@ -336,6 +381,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     LOGI("[STEP] nativeLoadISO: VU_Core + DMA created");
 
     g_init_phase = 8;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 8: BIOS init");
     LOGI("[DIAG] Phase 8: PS2_BIOS::init, ee=%p iop=%p", (void*)g_ee.get(), (void*)g_iop.get());
     PS2_BIOS::init();
     PS2_BIOS::set_ee_core(g_ee.get());
@@ -343,6 +389,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     LOGI("[STEP] nativeLoadISO: BIOS init + cores wired");
 
     g_init_phase = 9;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 9: load_game");
     LOGI("[DIAG] Phase 9: load_game");
     LOGI("[STEP] nativeLoadISO: load_game starting");
     if (!load_game(path)) {
@@ -355,6 +402,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     LOGI("[STEP] nativeLoadISO: load_game done");
 
     g_init_phase = 10;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 10: SPU2");
     LOGI("[DIAG] Phase 10: SPU2_init");
     LOGI("[STEP] nativeLoadISO: SPU2_init starting");
     if (!SPU2_init()) {
@@ -364,6 +412,7 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
     }
 
     g_init_phase = 11;
+    snprintf(g_debug_text, sizeof(g_debug_text), "Phase 11: DONE");
     LOGI("[DIAG] Phase 11: nativeLoadISO complete");
     snprintf(g_debug_text, sizeof(g_debug_text), "[OK] Juego cargado. Esperando inicio de CPU...");
     LOGI("[STEP] nativeLoadISO: DONE SUCCESSFULLY");
