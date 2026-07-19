@@ -82,7 +82,7 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
 #endif
     const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" : (sig == SIGABRT) ? "SIGABRT" : "UNKNOWN";
 
-    const char* crash_log_path = "/data/data/com.chrispixel.ps2recompiler/files/crash.log";
+    const char* crash_log_path = "/sdcard/Download/ps2_crash.log";
     FILE* f = fopen(crash_log_path, "w");
     if (f) {
         fprintf(f, "=== CRASH LOG ===\n");
