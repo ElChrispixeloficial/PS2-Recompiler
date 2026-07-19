@@ -133,25 +133,15 @@ uint32_t GS_Vulkan::find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags
 }
 
 bool GS_Vulkan::create_instance() {
-    VkApplicationInfo ai{};
-    ai.sType              = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    ai.pApplicationName   = "PS2-Recompiler";
-    ai.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    ai.pEngineName        = "PS2";
-    ai.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
-    ai.apiVersion         = VK_MAKE_VERSION(1, 0, 0);
-
-    const char* exts[] = { "VK_KHR_surface", "VK_KHR_android_surface" };
-
     VkInstanceCreateInfo ii{};
-    ii.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    ii.pApplicationInfo        = &ai;
-    ii.enabledExtensionCount   = 2;
-    ii.ppEnabledExtensionNames = exts;
+    ii.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 
     VkResult r = vkCreateInstance(&ii, nullptr, &m_instance);
-    if (r != VK_SUCCESS) { LOGE("vkCreateInstance failed: %d", r); return false; }
-    LOGI("Vulkan instance created OK (Vulkan 1.0)");
+    if (r != VK_SUCCESS) {
+        LOGE("vkCreateInstance (minimal) failed: %d", r);
+        return false;
+    }
+    LOGI("Vulkan instance created OK (minimal)");
     return true;
 }
 
@@ -716,6 +706,8 @@ bool GS_Vulkan::create_texturing() {
     return true;
 }
 
+extern int g_init_phase;
+
 bool GS_Vulkan::init(ANativeWindow* window) {
     if (m_ready) {
         LOGI("Vulkan already initialized, skipping re-init");
@@ -723,34 +715,48 @@ bool GS_Vulkan::init(ANativeWindow* window) {
     }
     LOGI("Initializing Vulkan...");
 
+    g_init_phase = 61;
     LOGI("[VK-INIT] Step 1: create_instance...");
     if (!create_instance())          return false;
+    g_init_phase = 62;
     LOGI("[VK-INIT] Step 2: create_surface(window=%p)...", window);
     if (!create_surface(window))     return false;
+    g_init_phase = 63;
     LOGI("[VK-INIT] Step 3: pick_physical_device...");
     if (!pick_physical_device())     return false;
+    g_init_phase = 64;
     LOGI("[VK-INIT] Step 4: create_logical_device...");
     if (!create_logical_device())    return false;
+    g_init_phase = 65;
     LOGI("[VK-INIT] Step 5: create_swapchain...");
     if (!create_swapchain())         return false;
+    g_init_phase = 66;
     LOGI("[VK-INIT] Step 6: create_render_pass...");
     if (!create_render_pass())       return false;
+    g_init_phase = 67;
     LOGI("[VK-INIT] Step 7: create_texturing...");
     if (!create_texturing())         return false;
+    g_init_phase = 68;
     LOGI("[VK-INIT] Step 8: create_pipeline...");
     if (!create_pipeline())          return false;
+    g_init_phase = 69;
     LOGI("[VK-INIT] Step 9: create_framebuffers...");
     if (!create_framebuffers())      return false;
+    g_init_phase = 70;
     LOGI("[VK-INIT] Step 10: create_command_pool...");
     if (!create_command_pool())      return false;
+    g_init_phase = 71;
     LOGI("[VK-INIT] Step 11: create_command_buffers...");
     if (!create_command_buffers())   return false;
+    g_init_phase = 72;
     LOGI("[VK-INIT] Step 12: create_sync_objects...");
     if (!create_sync_objects())      return false;
+    g_init_phase = 73;
     LOGI("[VK-INIT] Step 13: create_vertex_buffer...");
     if (!create_vertex_buffer(4 * 1024 * 1024)) return false;
 
     m_ready = true;
+    g_init_phase = 74;
     LOGI("Vulkan initialized OK");
     return true;
 }

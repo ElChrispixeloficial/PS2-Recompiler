@@ -59,7 +59,7 @@ static constexpr int64_t EE_CYCLES = 4915200 / 60;
 static char g_debug_text[4096] = "Iniciando sistema...\n";
 static bool g_critical_alert = false;
 static bool g_bios_loaded = false;
-static int g_init_phase = 0;
+int g_init_phase = 0;
 
 // Búfer temporal seguro para cargar la BIOS desde Android
 static uint8_t s_bios_temp[4 * 1024 * 1024];
