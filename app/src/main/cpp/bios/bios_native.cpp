@@ -163,44 +163,55 @@ void PS2_BIOS::execute_lle() {
 
 // ─── BIOS function interception ──────────────────────────────────────────────
 bool PS2_BIOS::intercept_bios_call(uint32_t pc, uint32_t& new_pc) {
-    // Check if PC is in BIOS function area
-    if (pc < 0x00004000) {
-        switch (pc) {
-        case BIOS_FN_SetGsCrt:
-            LOGI("BIOS HLE: SetGsCrt -> NOP");
-            new_pc = pc + 8; // Skip delay slot
-            return true;
-        case BIOS_FN_GsResetGraph:
-            LOGI("BIOS HLE: GsResetGraph -> NOP");
+    // Check if PC is in BIOS function area (KSEG1: 0xBFC00000-0xBFC03FFF)
+    // or physical BIOS ROM area (0x00000000-0x00003FFF)
+    uint32_t bios_offset = 0;
+    if (pc >= 0xBFC00000u && pc < 0xBFC04000u) {
+        bios_offset = pc - 0xBFC00000u;
+    } else if (pc < 0x00004000u) {
+        bios_offset = pc;
+    } else {
+        return false;
+    }
+
+    switch (bios_offset) {
+    case BIOS_FN_SetGsCrt:
+        LOGI("BIOS HLE: SetGsCrt -> NOP");
+        new_pc = pc + 8; // Skip delay slot
+        return true;
+    case BIOS_FN_GsResetGraph:
+        LOGI("BIOS HLE: GsResetGraph -> NOP");
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_Exit:
+        LOGI("BIOS HLE: Exit -> halt");
+        g_ee_native->state.halted = true;
+        return true;
+    case BIOS_FN_LoadExecPS2:
+        LOGI("BIOS HLE: LoadExecPS2");
+        new_pc = g_ee_native->state.gpr_lo[4]; // a0 = entry point
+        return true;
+    case BIOS_FN_Sync:
+        LOGI("BIOS HLE: Sync -> NOP");
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_SifLoadModule:
+        LOGI("BIOS HLE: SifLoadModule -> NOP (return 1)");
+        g_ee_native->state.gpr_lo[2] = 1; // return success
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_SifExecModuleBuffer:
+        LOGI("BIOS HLE: SifExecModuleBuffer -> NOP (return 1)");
+        g_ee_native->state.gpr_lo[2] = 1;
+        new_pc = pc + 8;
+        return true;
+    default:
+        if (bios_offset < 0x4000) {
+            LOGI("BIOS HLE: Unknown function at offset 0x%04X (PC=0x%08X) -> NOP", bios_offset, pc);
             new_pc = pc + 8;
             return true;
-        case BIOS_FN_Exit:
-            LOGI("BIOS HLE: Exit -> halt");
-            g_ee_native->state.halted = true;
-            return true;
-        case BIOS_FN_LoadExecPS2:
-            LOGI("BIOS HLE: LoadExecPS2");
-            // Game name and entry from registers a0, a1
-            new_pc = g_ee_native->state.gpr_lo[4]; // a0 = entry point
-            return true;
-        case BIOS_FN_Sync:
-            LOGI("BIOS HLE: Sync -> NOP");
-            new_pc = pc + 8;
-            return true;
-        case BIOS_FN_SifLoadModule:
-            LOGI("BIOS HLE: SifLoadModule -> NOP (return 1)");
-            g_ee_native->state.gpr_lo[2] = 1; // return success
-            new_pc = pc + 8;
-            return true;
-        default:
-            // Unknown BIOS function - log and skip
-            if (pc < 0x4000) {
-                LOGI("BIOS HLE: Unknown function at 0x%08X -> NOP", pc);
-                new_pc = pc + 8;
-                return true;
-            }
-            break;
         }
+        break;
     }
     return false;
 }

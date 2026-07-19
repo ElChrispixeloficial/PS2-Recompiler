@@ -191,9 +191,10 @@ static void cpu_loop() {
     uint32_t last_ee_pc = 0;
     int stuck_counter = 0;
 
-    if (!g_bios_loaded) {
-        PS2_BIOS::execute();
-    }
+    // Always initialize EE state via BIOS HLE (fast boot).
+    // Previously this was skipped when g_bios_loaded=1, which left COP0,
+    // interrupts, SIF, and stack uninitialized — causing immediate crashes.
+    PS2_BIOS::execute();
 
     while (g_running) {
         if (g_paused) { 

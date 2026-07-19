@@ -95,6 +95,12 @@ public:
 
     bool is_valid() const { return m_code != nullptr && m_blocks != nullptr; }
     
+    bool is_in_code(void* ptr) const {
+        auto p = reinterpret_cast<uintptr_t>(ptr);
+        auto base = reinterpret_cast<uintptr_t>(m_code);
+        return p >= base && p < base + m_capacity;
+    }
+    
 private:
     uint8_t* m_code;
     size_t   m_capacity;

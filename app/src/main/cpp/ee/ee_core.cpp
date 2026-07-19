@@ -7,6 +7,7 @@
 #include "code_cache.h"
 #include "ee_memory.h"
 #include "mips_defs.h"
+#include "../bios/bios_native.h"
 #include <android/log.h>
 #include <cstring>
 
@@ -107,6 +108,14 @@ void EE_Core::run_cycles(int64_t cycles) {
     while (cycles_run < cycles && !state.halted) {
         uint32_t pc = state.pc;
 
+        // BIOS function interception (HLE)
+        uint32_t bios_pc = 0;
+        if (PS2_BIOS::intercept_bios_call(pc, bios_pc)) {
+            state.pc = bios_pc;
+            cycles_run += 2;
+            continue;
+        }
+
         // Buscar bloque ya compilado en el cache
         auto fn = reinterpret_cast<EE_Recompiler::CompiledBlock>(cache->lookup(pc));
 
@@ -117,6 +126,13 @@ void EE_Core::run_cycles(int64_t cycles) {
                 state.halted = true;
                 break;
             }
+        }
+
+        // Validate block pointer is within code cache range
+        if (!cache->is_in_code(reinterpret_cast<void*>(fn))) {
+            LOGE("Block fn=%p out of code cache range for PC=0x%08X — halting", (void*)fn, pc);
+            state.halted = true;
+            break;
         }
 
         // Ejecutar el bloque compilado (código ARM64 nativo)

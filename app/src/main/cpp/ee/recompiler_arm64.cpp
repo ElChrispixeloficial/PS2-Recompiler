@@ -969,9 +969,11 @@ void EE_Recompiler::invalidate(uint32_t s, uint32_t e) { m_cache.invalidate_rang
 EE_Recompiler::CompiledBlock EE_Recompiler::compile_block(uint32_t guest_pc) {
     // ESPIA DE RECOMPILACIÓN
     static int compile_log_count = 0;
-    if (compile_log_count < 30) {
+    if (compile_log_count < 50) {
         uint32_t first_instr = ee_mem_read32(guest_pc);
-        LOGI("JIT Compilando PC: 0x%08X | Instruccion: 0x%08X", guest_pc, first_instr);
+        bool is_bios = (guest_pc >= 0xBFC00000u && guest_pc < 0xC0000000u);
+        LOGI("JIT Compilar[%d] PC: 0x%08X%s | Instr: 0x%08X",
+             compile_log_count, guest_pc, is_bios ? " (BIOS)" : "", first_instr);
         compile_log_count++;
     }
 
@@ -1036,5 +1038,12 @@ EE_Recompiler::CompiledBlock EE_Recompiler::compile_block(uint32_t guest_pc) {
 
     auto fn = reinterpret_cast<CompiledBlock>(code);
     m_cache.register_block(guest_pc, reinterpret_cast<CodeCache::BlockFn>(fn), code_size);
+
+    static int compile_done_count = 0;
+    if (compile_done_count < 50) {
+        LOGI("JIT OK PC=0x%08X code=%p size=%zu", guest_pc, (void*)fn, code_size);
+        compile_done_count++;
+    }
+
     return fn;
 }
