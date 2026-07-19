@@ -82,14 +82,39 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
 #endif
     const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" : (sig == SIGABRT) ? "SIGABRT" : "UNKNOWN";
 
-    const char* crash_log_path = "/sdcard/Download/ps2_crash.log";
-    FILE* f = fopen(crash_log_path, "w");
+    const char* pc_lib = "unknown";
+    const char* lr_lib = "unknown";
+    char pc_offset[128] = "";
+    char lr_offset[128] = "";
+    FILE* maps = fopen("/proc/self/maps", "r");
+    if (maps) {
+        char line[512];
+        uintptr_t pc_val = (uintptr_t)pc;
+        uintptr_t lr_val = (uintptr_t)lr;
+        while (fgets(line, sizeof(line), maps)) {
+            uintptr_t start, end;
+            char perms[8], path[256] = "";
+            if (sscanf(line, "%lx-%lx %4s %*s %*s %*s %255[^\n]", &start, &end, perms, path) >= 3) {
+                if (pc_val >= start && pc_val < end) {
+                    pc_lib = strdup(path);
+                    snprintf(pc_offset, sizeof(pc_offset), "%s+0x%lx", path, pc_val - start);
+                }
+                if (lr_val >= start && lr_val < end) {
+                    lr_lib = strdup(path);
+                    snprintf(lr_offset, sizeof(lr_offset), "%s+0x%lx", path, lr_val - start);
+                }
+            }
+        }
+        fclose(maps);
+    }
+
+    FILE* f = fopen("/sdcard/Download/ps2_crash.log", "w");
     if (f) {
         fprintf(f, "=== CRASH LOG ===\n");
         fprintf(f, "Signal: %s (%d)\n", sig_name, sig);
         fprintf(f, "Fault address: %p\n", fault_addr);
-        fprintf(f, "PC: %p\n", pc);
-        fprintf(f, "SP: %p  LR: %p\n", sp, lr);
+        fprintf(f, "PC: %p  [%s]\n", pc, pc_offset[0] ? pc_offset : pc_lib);
+        fprintf(f, "SP: %p  LR: %p  [%s]\n", sp, lr, lr_offset[0] ? lr_offset : lr_lib);
         fprintf(f, "g_init_phase: %d\n", g_init_phase);
         fprintf(f, "g_bios_loaded: %d\n", (int)g_bios_loaded);
         fprintf(f, "g_running: %d  g_paused: %d\n", (int)g_running.load(), (int)g_paused.load());
@@ -112,19 +137,17 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
     }
 
     snprintf(g_debug_text, sizeof(g_debug_text),
-        "CRASH: %s at %p\nPC=%p SP=%p\nPhase=%d Bios=%d\nWindow=%p GS=%p",
-        sig_name, fault_addr, pc, sp, g_init_phase, (int)g_bios_loaded, (void*)g_window, (void*)g_gs.get());
+        "CRASH: %s at %p\nPC: %s\nPhase=%d",
+        sig_name, fault_addr, pc_offset[0] ? pc_offset : "?", g_init_phase);
 
     __android_log_print(ANDROID_LOG_ERROR, TAG,
         "*** CRASH: %s at %p (PC=%p) ***", sig_name, fault_addr, pc);
     __android_log_print(ANDROID_LOG_ERROR, TAG,
-        "EE_PC=0x%08X g_running=%d g_paused=%d g_bios=%d g_init_phase=%d",
-        g_ee ? g_ee->state.pc : 0, (int)g_running.load(), (int)g_paused.load(), (int)g_bios_loaded, g_init_phase);
-    if (g_ee) {
-        __android_log_print(ANDROID_LOG_ERROR, TAG,
-            "EE SP=0x%08X RA=0x%08X",
-            (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31]);
-    }
+        "PC: %s", pc_offset[0] ? pc_offset : "unknown");
+    __android_log_print(ANDROID_LOG_ERROR, TAG,
+        "LR: %s", lr_offset[0] ? lr_offset : "unknown");
+    __android_log_print(ANDROID_LOG_ERROR, TAG,
+        "EE_PC=0x%08X g_init_phase=%d", g_ee ? g_ee->state.pc : 0, g_init_phase);
     _exit(128 + sig);
 }
 
