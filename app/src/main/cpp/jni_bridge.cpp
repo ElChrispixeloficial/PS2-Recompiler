@@ -111,6 +111,7 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
     FILE* f = fopen("/sdcard/Download/ps2_crash.log", "w");
     if (f) {
         fprintf(f, "=== CRASH LOG ===\n");
+        fprintf(f, "Build: %s %s\n", __DATE__, __TIME__);
         fprintf(f, "Signal: %s (%d)\n", sig_name, sig);
         fprintf(f, "Fault address: %p\n", fault_addr);
         fprintf(f, "PC: %p  [%s]\n", pc, pc_offset[0] ? pc_offset : pc_lib);
