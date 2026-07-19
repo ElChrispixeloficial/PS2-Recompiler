@@ -139,7 +139,7 @@ bool GS_Vulkan::create_instance() {
     ai.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
     ai.pEngineName        = "PS2";
     ai.engineVersion      = VK_MAKE_VERSION(1, 0, 0);
-    ai.apiVersion         = VK_API_VERSION_1_1;
+    ai.apiVersion         = VK_MAKE_VERSION(1, 0, 0);
 
     const char* exts[] = { "VK_KHR_surface", "VK_KHR_android_surface" };
 
@@ -151,6 +151,7 @@ bool GS_Vulkan::create_instance() {
 
     VkResult r = vkCreateInstance(&ii, nullptr, &m_instance);
     if (r != VK_SUCCESS) { LOGE("vkCreateInstance failed: %d", r); return false; }
+    LOGI("Vulkan instance created OK (Vulkan 1.0)");
     return true;
 }
 
