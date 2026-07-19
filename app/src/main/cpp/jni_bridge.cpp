@@ -4,6 +4,7 @@
 
 #include "ee/ee_core.h"
 #include "ee/ee_memory.h"
+#include "ee/code_cache.h"
 #include "gs/gs_core.h"
 #include "iop/iop_core.h"
 #include "vu/vu_core.h"
@@ -61,6 +62,18 @@ static bool g_critical_alert = false;
 static bool g_bios_loaded = false;
 int g_init_phase = 0;
 
+// Code cache base for crash diagnostics (set once from CodeCache)
+static uint8_t* g_code_cache_base = nullptr;
+
+// Per-block MIPS PC ring buffer — last 64 blocks executed
+constexpr int PC_RING_SIZE = 64;
+uint32_t g_pc_ring[PC_RING_SIZE];
+int g_pc_ring_idx = 0;
+
+void set_code_cache_base(uint8_t* base) {
+    g_code_cache_base = base;
+}
+
 // Búfer temporal seguro para cargar la BIOS desde Android
 static uint8_t s_bios_temp[4 * 1024 * 1024];
 
@@ -75,10 +88,15 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
     void* pc = (void*)uc->uc_mcontext.pc;
     void* sp = (void*)uc->uc_mcontext.sp;
     void* lr = (void*)uc->uc_mcontext.regs[30];
+    uint64_t regs[31];
+    for (int i = 0; i < 31; i++) regs[i] = uc->uc_mcontext.regs[i];
+    uint64_t pstate = uc->uc_mcontext.pstate;
 #else
-    void* pc = (void*)uc->uc_mcontext.arm_pc;
-    void* sp = (void*)uc->uc_mcontext.arm_sp;
-    void* lr = (void*)uc->uc_mcontext.arm_lr;
+    void* pc = (void*)0;
+    void* sp = (void*)0;
+    void* lr = (void*)0;
+    uint64_t regs[31] = {};
+    uint64_t pstate = 0;
 #endif
     const char* sig_name = (sig == SIGSEGV) ? "SIGSEGV" : (sig == SIGABRT) ? "SIGABRT" : "UNKNOWN";
 
@@ -116,6 +134,7 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
         fprintf(f, "Fault address: %p\n", fault_addr);
         fprintf(f, "PC: %p  [%s]\n", pc, pc_offset[0] ? pc_offset : pc_lib);
         fprintf(f, "SP: %p  LR: %p  [%s]\n", sp, lr, lr_offset[0] ? lr_offset : lr_lib);
+        fprintf(f, "PSTATE: 0x%016llx\n", (unsigned long long)pstate);
         fprintf(f, "g_init_phase: %d\n", g_init_phase);
         fprintf(f, "g_bios_loaded: %d\n", (int)g_bios_loaded);
         fprintf(f, "g_running: %d  g_paused: %d\n", (int)g_running.load(), (int)g_paused.load());
@@ -126,6 +145,7 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
         fprintf(f, "g_vu: %p\n", (void*)g_vu.get());
         fprintf(f, "g_dma: %p\n", (void*)g_dma.get());
         fprintf(f, "g_ee_core_ptr: %p\n", (void*)g_ee_core_ptr);
+        fprintf(f, "g_code_cache_base: %p\n", (void*)g_code_cache_base);
         if (g_ee) {
             fprintf(f, "EE PC=0x%08X SP=0x%08X RA=0x%08X\n",
                 g_ee->state.pc, (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31]);
@@ -133,13 +153,135 @@ static void crash_signal_handler(int sig, siginfo_t* info, void* uc_void) {
         if (g_gs) {
             fprintf(f, "GS vulkan ptr: %p\n", (void*)g_gs->get_vulkan());
         }
+        // ─── Full ARM64 register dump ───────────────────────────────
+#ifdef __aarch64__
+        fprintf(f, "\n--- ARM64 REGISTERS ---\n");
+        for (int i = 0; i < 31; i += 2) {
+            fprintf(f, "  x%-2d = 0x%016llx", i, (unsigned long long)regs[i]);
+            if (i + 1 < 31) fprintf(f, "  x%-2d = 0x%016llx", i + 1, (unsigned long long)regs[i + 1]);
+            fprintf(f, "\n");
+        }
+        fprintf(f, "  SP = 0x%016llx\n", (unsigned long long)(uintptr_t)sp);
+        fprintf(f, "  PC = 0x%016llx\n", (unsigned long long)(uintptr_t)pc);
+        fprintf(f, "  LR = 0x%016llx\n", (unsigned long long)(uintptr_t)lr);
+        // ─── Decode ARM64 instructions around crash PC ──────────────
+        fprintf(f, "\n--- ARM64 DISASSEMBLY (PC -8 .. PC +12) ---\n");
+        uintptr_t pc_val = (uintptr_t)pc;
+        uint32_t* insn_ptr = (uint32_t*)(pc_val - 8);
+        for (int i = -2; i <= 3; i++) {
+            uint32_t insn = insn_ptr[i + 2];
+            uintptr_t addr = (uintptr_t)(pc_val + i * 4);
+            const char* prefix = (i == 0) ? ">>>" : "   ";
+            fprintf(f, "  %s 0x%016llx : %08X", prefix, (unsigned long long)addr, insn);
+            // Decode common ARM64 instructions
+            if ((insn & 0xFFE00000) == 0xD63F0000) {
+                fprintf(f, "  BLR x%d\n", (insn >> 5) & 31);
+            } else if ((insn & 0xFFE00000) == 0xD61F0000) {
+                fprintf(f, "  BR x%d\n", (insn >> 5) & 31);
+            } else if ((insn & 0xFFFFFC00) == 0xD65F0000) {
+                fprintf(f, "  RET\n");
+            } else if ((insn & 0xFF000000) == 0x94000000 || (insn & 0xFF000000) == 0x97000000) {
+                int32_t off = ((int32_t)(insn & 0x3FFFFFF) << 6) >> 6;
+                fprintf(f, "  BL 0x%llx\n", (unsigned long long)(addr + off * 4));
+            } else if ((insn & 0xFC000000) == 0x14000000 || (insn & 0xFC000000) == 0x17000000) {
+                int32_t off = ((int32_t)(insn & 0x3FFFFFF) << 6) >> 6;
+                fprintf(f, "  B 0x%llx\n", (unsigned long long)(addr + off * 4));
+            } else if ((insn & 0xFFE00000) == 0xF9400000) {
+                unsigned Rt = insn & 31, Rn = (insn >> 5) & 31;
+                unsigned imm = ((insn >> 10) & 0x7FF) << 3;
+                fprintf(f, "  LDR x%d, [x%d, #%u]", Rt, Rn, imm);
+                if (Rn == 19) fprintf(f, "  ; EE_State + %u", imm);
+                fprintf(f, "\n");
+            } else if ((insn & 0xFFE00000) == 0xF9000000) {
+                unsigned Rt = insn & 31, Rn = (insn >> 5) & 31;
+                unsigned imm = ((insn >> 10) & 0x7FF) << 3;
+                fprintf(f, "  STR x%d, [x%d, #%u]", Rt, Rn, imm);
+                if (Rn == 19) fprintf(f, "  ; EE_State + %u", imm);
+                fprintf(f, "\n");
+            } else if ((insn & 0xFFE00000) == 0xB9400000) {
+                unsigned Rt = insn & 31, Rn = (insn >> 5) & 31;
+                unsigned imm = ((insn >> 10) & 0x7FF) << 2;
+                fprintf(f, "  LDR w%d, [x%d, #%u]", Rt, Rn, imm);
+                if (Rn == 19) fprintf(f, "  ; EE_State + %u", imm);
+                fprintf(f, "\n");
+            } else if ((insn & 0xFFE00000) == 0xB9000000) {
+                unsigned Rt = insn & 31, Rn = (insn >> 5) & 31;
+                unsigned imm = ((insn >> 10) & 0x7FF) << 2;
+                fprintf(f, "  STR w%d, [x%d, #%u]", Rt, Rn, imm);
+                if (Rn == 19) fprintf(f, "  ; EE_State + %u", imm);
+                fprintf(f, "\n");
+            } else if ((insn & 0xFFE00000) == 0xAA0003E0) {
+                unsigned Rd = insn & 31, Rm = (insn >> 16) & 31;
+                fprintf(f, "  MOV x%d, x%d\n", Rd, Rm);
+            } else if ((insn & 0xFF000000) == 0xD2800000) {
+                unsigned Rd = insn & 31;
+                uint64_t imm = ((uint64_t)(insn >> 5) & 0xFFFF) << (((insn >> 21) & 3) * 16);
+                fprintf(f, "  MOVZ x%d, #0x%llx\n", Rd, (unsigned long long)imm);
+            } else if ((insn & 0xFF000000) == 0xF2800000) {
+                unsigned Rd = insn & 31;
+                uint64_t imm = ((uint64_t)(insn >> 5) & 0xFFFF) << (((insn >> 21) & 3) * 16);
+                fprintf(f, "  MOVK x%d, #0x%llx, LSL #%d\n", Rd, (unsigned long long)imm, ((insn >> 21) & 3) * 16);
+            } else if ((insn & 0xFFC00000) == 0xB4000000) {
+                unsigned Rt = insn & 31;
+                int32_t off = ((int32_t)((insn >> 5) & 0x7FFFF) << 13) >> 13;
+                fprintf(f, "  CBZ x%d, %lld\n", Rt, (long long)(addr + off * 4));
+            } else if ((insn & 0xFFC00000) == 0xB5000000) {
+                unsigned Rt = insn & 31;
+                int32_t off = ((int32_t)((insn >> 5) & 0x7FFFF) << 13) >> 13;
+                fprintf(f, "  CBNZ x%d, %lld\n", Rt, (long long)(addr + off * 4));
+            } else if ((insn & 0xFF800000) == 0x54000000) {
+                unsigned cond = insn & 0xF;
+                int32_t off = ((int32_t)((insn >> 5) & 0x7FF)) << 1;
+                const char* conds[] = {"EQ","NE","CS","CC","MI","PL","VS","VC","HI","LS","GE","LT","GT","LE","AL","NV"};
+                fprintf(f, "  B.%s %lld\n", conds[cond], (long long)(addr + off));
+            } else if ((insn & 0xFFE0FC00) == 0xEB00001F) {
+                unsigned Rn = (insn >> 5) & 31, Rm = (insn >> 16) & 31;
+                fprintf(f, "  CMP x%d, x%d\n", Rn, Rm);
+            } else if ((insn & 0xFFE003E0) == 0xAA0003E0) {
+                unsigned Rd = insn & 31, Rm = (insn >> 16) & 31;
+                fprintf(f, "  ORR x%d, xzr, x%d (= MOV x%d, x%d)\n", Rd, Rm, Rd, Rm);
+            } else if ((insn & 0xFFE0FC00) == 0x9A800000) {
+                unsigned Rd = insn & 31, Rn = (insn >> 5) & 31, Rm = (insn >> 16) & 31;
+                unsigned cond = (insn >> 12) & 0xF;
+                const char* conds[] = {"EQ","NE","CS","CC","MI","PL","VS","VC","HI","LS","GE","LT","GT","LE","AL","NV"};
+                fprintf(f, "  CSEL x%d, x%d, x%d, %s\n", Rd, Rn, Rm, conds[cond]);
+            } else {
+                fprintf(f, "  (unknown)\n");
+            }
+        }
+        // ─── Identify if crash is in code cache ─────────────────────
+        if (g_code_cache_base) {
+            uintptr_t cc_base = (uintptr_t)g_code_cache_base;
+            uintptr_t cc_end = cc_base + CODE_CACHE_SIZE;
+            if (pc_val >= cc_base && pc_val < cc_end) {
+                fprintf(f, "\n>>> CRASH IN JIT CODE CACHE at offset 0x%lx <<<\n", pc_val - cc_base);
+                fprintf(f, ">>> Code cache base: %p  capacity: %zu MB <<<\n",
+                    g_code_cache_base, CODE_CACHE_SIZE / (1024*1024));
+            } else {
+                fprintf(f, "\n>>> CRASH NOT in code cache (in %s) <<<\n",
+                    pc_offset[0] ? pc_offset : pc_lib);
+            }
+        }
+#endif
+        // ─── MIPS PC ring buffer ────────────────────────────────────
+        fprintf(f, "\n--- LAST %d MIPS PCs EXECUTED ---\n", PC_RING_SIZE);
+        for (int i = 0; i < PC_RING_SIZE; i++) {
+            int idx = (g_pc_ring_idx - PC_RING_SIZE + i + PC_RING_SIZE * 2) % PC_RING_SIZE;
+            if (g_pc_ring[idx] != 0) {
+                fprintf(f, "  [%3d] 0x%08X", i, g_pc_ring[idx]);
+                if (g_pc_ring[idx] >= 0xBFC00000u && g_pc_ring[idx] < 0xC0000000u)
+                    fprintf(f, "  (BIOS ROM)");
+                fprintf(f, "\n");
+            }
+        }
         fprintf(f, "=== END CRASH LOG ===\n");
         fclose(f);
     }
 
     snprintf(g_debug_text, sizeof(g_debug_text),
-        "CRASH: %s at %p\nPC: %s\nPhase=%d",
-        sig_name, fault_addr, pc_offset[0] ? pc_offset : "?", g_init_phase);
+        "CRASH: %s at %p\nPC: %s\nEE PC=0x%08X\nCheck /sdcard/Download/ps2_crash.log",
+        sig_name, fault_addr, pc_offset[0] ? pc_offset : "?",
+        g_ee ? g_ee->state.pc : 0);
 
     __android_log_print(ANDROID_LOG_ERROR, TAG,
         "*** CRASH: %s at %p (PC=%p) ***", sig_name, fault_addr, pc);
@@ -160,6 +302,8 @@ extern "C" void push_jit_log(const char* msg) {
         g_jit_log_buffer[g_jit_log_offset] = '\0';
     }
 }
+
+extern void set_code_cache_base(uint8_t* base);
 
 static void full_cleanup() {
     g_running = false; g_paused = false;
@@ -184,6 +328,8 @@ static void full_cleanup() {
     g_init_phase = 0;
     g_jit_log_offset = 0;
     g_jit_log_buffer[0] = '\0';
+    memset(g_pc_ring, 0, sizeof(g_pc_ring));
+    g_pc_ring_idx = 0;
 }
 
 static void cpu_loop() {

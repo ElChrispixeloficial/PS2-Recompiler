@@ -11,6 +11,13 @@
 #include <android/log.h>
 #include <cstring>
 
+extern void set_code_cache_base(uint8_t* base);
+
+// Per-block MIPS PC ring buffer (defined in jni_bridge.cpp)
+constexpr int PC_RING_SIZE = 64;
+extern uint32_t g_pc_ring[];
+extern int g_pc_ring_idx;
+
 #define LOG_TAG "PS2-EE"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -27,7 +34,8 @@ EE_Core::EE_Core()
     memset(&state, 0, sizeof(state));
     ee_hw_init(hw);
     state.pc = 0xBFC00000u;  // Reset vector: inicio de BIOS
-    LOGI("EE Core iniciado. RAM: %zu MB", EE_RAM_SIZE / (1024*1024));
+    set_code_cache_base(cache->code_base());
+    LOGI("EE Core iniciado. RAM: %zu MB, CodeCache base: %p", EE_RAM_SIZE / (1024*1024), cache->code_base());
 }
 
 EE_Core::~EE_Core() = default;
@@ -136,6 +144,8 @@ void EE_Core::run_cycles(int64_t cycles) {
         }
 
         // Ejecutar el bloque compilado (código ARM64 nativo)
+        g_pc_ring[g_pc_ring_idx] = pc;
+        g_pc_ring_idx = (g_pc_ring_idx + 1) % PC_RING_SIZE;
         fn(&state, ee_ram.get());
 
         cycles_run += 64;

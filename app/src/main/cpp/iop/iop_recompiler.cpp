@@ -26,6 +26,15 @@ static constexpr uint32_t OFF_LO   = offsetof(IOP_State, lo);
 static constexpr uint32_t OFF_COP0 = offsetof(IOP_State, cop0);
 static inline uint32_t gpr_off(unsigned r) { return OFF_GPR + r * 4; }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// IOP ARM64 Emitter — Register convention:
+//   x19 = IOP_State*  (callee-saved, set in prologue)
+//   x20 = IOP RAM*    (callee-saved, set in prologue)
+//   x21 = branch target address
+//   x22 = branch taken flag (1=taken, 0=not taken)
+//   x16 = scratch for function pointers (call)
+//   x9-x15 = scratch
+// ═══════════════════════════════════════════════════════════════════════════════
 struct E {
     uint8_t* p;
     void u32(uint32_t v) { memcpy(p, &v, 4); p += 4; }
@@ -41,8 +50,11 @@ struct E {
     void movr(unsigned Wd, unsigned Wm) { u32(0x2A0003E0u | ((Wm&31)<<16) | (Wd&31)); }
     void ldr32(unsigned Wt, unsigned Xn, uint32_t im) { u32(0xB9400000u | ((im>>2)<<10) | ((Xn&31)<<5) | (Wt&31)); }
     void str32(unsigned Wt, unsigned Xn, uint32_t im) { u32(0xB9000000u | ((im>>2)<<10) | ((Xn&31)<<5) | (Wt&31)); }
-    void load_gpr(unsigned Wd, unsigned r) { if (!r) { u32(0x2A1F03E0u | (Wd&31)); return; } ldr32(Wd, 0, gpr_off(r)); }
-    void store_gpr(unsigned Ws, unsigned r) { if (!r) return; str32(Ws, 0, gpr_off(r)); }
+
+    // All state accesses use x19 as base (IOP_State pointer, callee-saved)
+    void load_gpr(unsigned Wd, unsigned r) { if (!r) { u32(0x2A1F03E0u | (Wd&31)); return; } ldr32(Wd, 19, gpr_off(r)); }
+    void store_gpr(unsigned Ws, unsigned r) { if (!r) return; str32(Ws, 19, gpr_off(r)); }
+
     void add(unsigned Wd, unsigned Wn, unsigned Wm){ u32(0x0B000000u | ((Wm&31)<<16) | ((Wn&31)<<5) | (Wd&31)); }
     void sub(unsigned Wd, unsigned Wn, unsigned Wm){ u32(0x4B000000u | ((Wm&31)<<16) | ((Wn&31)<<5) | (Wd&31)); }
     void andr(unsigned Wd, unsigned Wn, unsigned Wm){ u32(0x0A000000u | ((Wm&31)<<16) | ((Wn&31)<<5) | (Wd&31)); }
@@ -67,15 +79,12 @@ struct E {
     void ubfx(unsigned Wd, unsigned Wn, unsigned lsb, unsigned width) { u32(0x53000000u | (((width-1)&0x3F)<<16) | ((lsb&0x3F)<<10) | ((Wn&31)<<5) | (Wd&31)); }
     void sxtw(unsigned Xd, unsigned Wn) { u32(0x93407C00u | ((Wn&31)<<5) | (Xd&31)); }
     void csel(unsigned Wd, unsigned Wn, unsigned Wm, unsigned cond) { u32(0x1A800000u | ((Wm&31)<<16) | ((cond&0xF)<<12) | ((Wn&31)<<5) | (Wd&31)); }
-    void smulh(unsigned Xd, unsigned Xn, unsigned Xm) { u32(0x9B407C00u | ((Xm&31)<<16) | ((Xn&31)<<5) | (Xd&31)); }
-    void umulh(unsigned Xd, unsigned Xn, unsigned Xm) { u32(0x9BC07C00u | ((Xm&31)<<16) | ((Xn&31)<<5) | (Xd&31)); }
 
-    // Usamos x21 y x22 para guardar state y ram temporalmente durante un BLR
+    // call() — x19/x20 are callee-saved, so C functions preserve them automatically.
+    // We only need to load the function address into x16 and BLR.
     void call(void* fn) {
-        u32(0xAA0003F5u); u32(0xAA0103F6u);         // mov x21, x0; mov x22, x1
         movi64(16, reinterpret_cast<uintptr_t>(fn));
         blr(16);
-        u32(0xAA1503E0u); u32(0xAA1603E1u);         // mov x0, x21; mov x1, x22
     }
 
     void prologue() {
@@ -83,6 +92,9 @@ struct E {
         u32(0x910003FDu);        // MOV x29, sp
         u32(0xA9BF53F3u);        // STP x19, x20, [sp, #-16]!
         u32(0xA9BF5BF5u);        // STP x21, x22, [sp, #-16]!
+        // x19 = IOP_State*, x20 = RAM* (from function args)
+        u32(0xAA0003F3u);        // MOV x19, x0  (state)
+        u32(0xAA0103F4u);        // MOV x20, x1  (ram)
     }
     void epilogue() {
         u32(0xA8C15BF5u);        // LDP x21, x22, [sp], #16
@@ -92,20 +104,11 @@ struct E {
     }
 };
 
-static bool is_term(uint32_t in) {
-    uint32_t op=(in>>26)&0x3F;
-    if (op == 0x02 || op == 0x03) return true;
-    if (op >= 0x04 && op <= 0x07) return true;
-    if (op == 0x01) return true;
-    if (op == 0x00) { uint32_t f = in & 0x3F; if (f==0x08||f==0x09||f==0x0C||f==0x0D) return true; }
-    return false;
-}
-
-IOP_Recompiler::IOP_Recompiler(CodeCache& c, IOP_State& s, uint8_t* ram)
-    : m_cache(c), m_state(s), m_ram(ram) { g_iop_ram_ptr = ram; }
-void IOP_Recompiler::invalidate(uint32_t s, uint32_t e) { m_cache.invalidate_range(s, e); }
-
-// Usamos x19 para el destino del salto, y x20 para la condición (1 tomado, 0 no tomado)
+// ═══════════════════════════════════════════════════════════════════════════════
+// R3000 instruction emitter
+//   x21 = branch target address (set by branch instructions)
+//   x22 = branch taken flag    (set by branch instructions)
+// ═══════════════════════════════════════════════════════════════════════════════
 static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
     uint32_t op=(in>>26)&0x3F, rs=(in>>21)&0x1F, rt=(in>>16)&0x1F, rd=(in>>11)&0x1F;
     uint32_t sa=(in>>6)&0x1F, fn=in&0x3F;
@@ -121,41 +124,39 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         case 0x04: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.lslv(9,9,11); e.store_gpr(9,rd); return false; // SLLV
         case 0x06: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.lsrv(9,9,11); e.store_gpr(9,rd); return false; // SRLV
         case 0x07: e.load_gpr(9,rt); e.load_gpr(10,rs); e.ubfx(11,10,0,5); e.asrv(9,9,11); e.store_gpr(9,rd); return false; // SRAV
-        case 0x08: e.load_gpr(19,rs); e.movi32(20,1); return true; // JR
-        case 0x09: e.load_gpr(19,rs); e.movi32(9,pc+8); e.store_gpr(9,rd?rd:31); e.movi32(20,1); return true; // JALR
-        case 0x0C: e.movi32(19, 0x80000080u); e.movi32(20,1); return true; // SYSCALL
-        case 0x0D: e.movi32(19, 0x80000080u); e.movi32(20,1); return true; // BREAK
-        case 0x10: e.ldr32(9, 0, OFF_HI); e.store_gpr(9,rd); return false; // MFHI
-        case 0x11: e.load_gpr(9,rs); e.str32(9, 0, OFF_HI); return false; // MTHI
-        case 0x12: e.ldr32(9, 0, OFF_LO); e.store_gpr(9,rd); return false; // MFLO
-        case 0x13: e.load_gpr(9,rs); e.str32(9, 0, OFF_LO); return false; // MTLO
+        case 0x08: e.load_gpr(21,rs); e.movi32(22,1); return true; // JR
+        case 0x09: e.load_gpr(21,rs); e.movi32(9,pc+8); e.store_gpr(9,rd?rd:31); e.movi32(22,1); return true; // JALR
+        case 0x0C: e.movi32(21, 0x80000080u); e.movi32(22,1); return true; // SYSCALL
+        case 0x0D: e.movi32(21, 0x80000080u); e.movi32(22,1); return true; // BREAK
+        case 0x10: e.ldr32(9, 19, OFF_HI); e.store_gpr(9,rd); return false; // MFHI
+        case 0x11: e.load_gpr(9,rs); e.str32(9, 19, OFF_HI); return false; // MTHI
+        case 0x12: e.ldr32(9, 19, OFF_LO); e.store_gpr(9,rd); return false; // MFLO
+        case 0x13: e.load_gpr(9,rs); e.str32(9, 19, OFF_LO); return false; // MTLO
         case 0x18: { // MULT: {HI,LO} = rs * rt (signed)
             e.load_gpr(9,rs); e.load_gpr(10,rt);
-            e.smull(18,9,10); // X18 = sign_extend(W9)*sign_extend(W10) (64-bit)
-            e.str32(18, 0, OFF_LO); // LO = low 32
+            e.smull(18,9,10);
+            e.str32(18, 19, OFF_LO);
             e.u32(0xD3607E4Bu); // LSR X11, X18, #32
-            e.str32(11, 0, OFF_HI); // HI = high 32
+            e.str32(11, 19, OFF_HI);
             return false;
         }
         case 0x19: { // MULTU
             e.load_gpr(9,rs); e.load_gpr(10,rt);
-            e.umull(18,9,10); // X18 = 64-bit result
-            e.str32(18, 0, OFF_LO);
+            e.umull(18,9,10);
+            e.str32(18, 19, OFF_LO);
             e.u32(0xD360FC12u); // LSR X12, X18, #32
-            e.str32(12, 0, OFF_HI);
+            e.str32(12, 19, OFF_HI);
             return false;
         }
         case 0x1A: { // DIV (signed)
             e.load_gpr(9,rs); e.load_gpr(10,rt);
-            // If divisor == 0: LO = 0xFFFFFFFF, HI = rs
             e.u32(0x6B1F001Fu); // CMP W10, #0
             e.sdiv(11,9,10);
-            e.msub(12,11,10,9); // W12 = 9 - 11*10 = remainder
-            // If W10 == 0, select 0xFFFFFFFF for LO and rs for HI
+            e.msub(12,11,10,9);
             e.movi32(13, 0xFFFFFFFF);
-            e.csel(11, 13, 11, 0x0); // If div==0, LO=0xFFFFFFFF, else LO=result
-            e.csel(12, 9, 12, 0x0);  // If div==0, HI=rs, else HI=remainder
-            e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
+            e.csel(11, 13, 11, 0x0);
+            e.csel(12, 9, 12, 0x0);
+            e.str32(11, 19, OFF_LO); e.str32(12, 19, OFF_HI);
             return false;
         }
         case 0x1B: { // DIVU (unsigned)
@@ -164,9 +165,9 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
             e.udiv(11,9,10);
             e.msub(12,11,10,9);
             e.movi32(13, 0xFFFFFFFF);
-            e.csel(11, 13, 11, 0x0); // If div==0, LO=0xFFFFFFFF
-            e.csel(12, 9, 12, 0x0);  // If div==0, HI=rs
-            e.str32(11, 0, OFF_LO); e.str32(12, 0, OFF_HI);
+            e.csel(11, 13, 11, 0x0);
+            e.csel(12, 9, 12, 0x0);
+            e.str32(11, 19, OFF_LO); e.str32(12, 19, OFF_HI);
             return false;
         }
         case 0x20: e.load_gpr(9,rs); e.load_gpr(10,rt); e.add(9,9,10); e.store_gpr(9,rd); return false; // ADD
@@ -181,18 +182,22 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
         case 0x2B: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(9,0x3); e.store_gpr(9,rd); return false; // SLTU
         }
         return false;
+
+    // REGIMM: BLTZ/BGEZ/etc.
     case 0x01: {
-        e.load_gpr(9,rs); e.cmp(9,31); e.cset(20, (rt&1)?0xA:0xB);
-        e.movi32(19, pc+4+boff);
+        e.load_gpr(9,rs); e.cmp(9,31); e.cset(22, (rt&1)?0xA:0xB);
+        e.movi32(21, pc+4+boff);
         if (rt & 0x10) { e.movi32(9,pc+8); e.store_gpr(9,31); }
         return true;
     }
-    case 0x02: e.movi32(19,tgt); e.movi32(20,1); return true;
-    case 0x03: e.movi32(9,pc+8); e.store_gpr(9,31); e.movi32(19,tgt); e.movi32(20,1); return true;
-    case 0x04: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(20,0x0); e.movi32(19,pc+4+boff); return true;
-    case 0x05: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(20,0x1); e.movi32(19,pc+4+boff); return true;
-    case 0x06: e.load_gpr(9,rs); e.cmp(9,31); e.cset(20,0xD); e.movi32(19,pc+4+boff); return true;
-    case 0x07: e.load_gpr(9,rs); e.cmp(9,31); e.cset(20,0xC); e.movi32(19,pc+4+boff); return true;
+    case 0x02: e.movi32(21,tgt); e.movi32(22,1); return true;                                           // J
+    case 0x03: e.movi32(9,pc+8); e.store_gpr(9,31); e.movi32(21,tgt); e.movi32(22,1); return true;     // JAL
+    case 0x04: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(22,0x0); e.movi32(21,pc+4+boff); return true; // BEQ
+    case 0x05: e.load_gpr(9,rs); e.load_gpr(10,rt); e.cmp(9,10); e.cset(22,0x1); e.movi32(21,pc+4+boff); return true; // BNE
+    case 0x06: e.load_gpr(9,rs); e.cmp(9,31); e.cset(22,0xD); e.movi32(21,pc+4+boff); return true;    // BLEZ
+    case 0x07: e.load_gpr(9,rs); e.cmp(9,31); e.cset(22,0xC); e.movi32(21,pc+4+boff); return true;    // BGTZ
+
+    // ALUImm: ADDI/ADDIU/SLTI/SLTIU/ANDI/ORI/XORI/LUI
     case 0x08: case 0x09: e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.store_gpr(9,rt); return false;
     case 0x0A: e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.cmp(9,10); e.cset(9,0xB); e.store_gpr(9,rt); return false;
     case 0x0B: e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.cmp(9,10); e.cset(9,0x3); e.store_gpr(9,rt); return false;
@@ -200,21 +205,25 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
     case 0x0D: e.load_gpr(9,rs); e.movi32(10, uint16_t(imm)); e.orr(9,9,10);  e.store_gpr(9,rt); return false;
     case 0x0E: e.load_gpr(9,rs); e.movi32(10, uint16_t(imm)); e.eor(9,9,10);  e.store_gpr(9,rt); return false;
     case 0x0F: e.movi32(9, uint32_t(uint16_t(imm)) << 16); e.store_gpr(9,rt); return false;
+
+    // Loads: LB/LBU/LH/LHU/LW
     case 0x20: case 0x24: case 0x21: case 0x25: case 0x23: {
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.movr(0,9);
         void* fn = (op==0x20||op==0x24)?(void*)&iop_bus_read8
                  : (op==0x21||op==0x25)?(void*)&iop_bus_read16
                  :                       (void*)&iop_bus_read32;
         e.call(fn);
-        if      (op==0x20) e.u32(0x13001C09u | (0<<5));
-        else if (op==0x21) e.u32(0x13003C09u);
-        else               e.movr(9,0);
+        if      (op==0x20) e.u32(0x13001C09u | (0<<5));   // SXTB W9, W0
+        else if (op==0x21) e.u32(0x13003C09u);              // SXTH W9, W0
+        else               e.movr(9,0);                     // MOV W9, W0
         if (op==0x24) { e.movi32(10,0xFF); e.andr(9,9,10); }
         if (op==0x25) { e.movi32(10,0xFFFF); e.andr(9,9,10); }
         e.store_gpr(9, rt);
         return false;
     }
-    case 0x28: case 0x29: case 0x2B: { // SB, SH, SW
+
+    // Stores: SB/SH/SW
+    case 0x28: case 0x29: case 0x2B: {
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
         e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
         void* fn = (op==0x28)?(void*)&iop_bus_write8
@@ -222,51 +231,49 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
                  :             (void*)&iop_bus_write32;
         e.call(fn); return false;
     }
-    case 0x2A: { // SWL: store word left (unimplemented, fallback to SW)
+    case 0x2A: { // SWL (fallback to SW)
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
         e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
         e.call((void*)&iop_bus_write32); return false;
     }
-    case 0x2E: { // SWR: store word right (unimplemented, fallback to SW)
+    case 0x2E: { // SWR (fallback to SW)
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10);
         e.load_gpr(10,rt); e.movr(0,9); e.movr(1,10);
         e.call((void*)&iop_bus_write32); return false;
     }
-    case 0x22: { // LWL: load word left (unimplemented, fallback to LW)
+    case 0x22: { // LWL (fallback to LW)
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.movr(0,9);
         e.call((void*)&iop_bus_read32); e.movr(9,0);
         e.store_gpr(9, rt); return false;
     }
-    case 0x26: { // LWR: load word right (unimplemented, fallback to LW)
+    case 0x26: { // LWR (fallback to LW)
         e.load_gpr(9,rs); e.movi32(10,uint32_t(imm)); e.add(9,9,10); e.movr(0,9);
         e.call((void*)&iop_bus_read32); e.movr(9,0);
         e.store_gpr(9, rt); return false;
     }
-    case 0x10: { // COP0
+
+    // COP0
+    case 0x10: {
         uint32_t sub = (in >> 21) & 0x1F;
         uint32_t rd = (in >> 11) & 0x1F;
         if (sub == 0x00) { // MFC0: rt = COP0[rd]
-            e.ldr32(9, 0, OFF_COP0 + rd * 4);
+            e.ldr32(9, 19, OFF_COP0 + rd * 4);
             e.store_gpr(9, rt); return false;
         }
         if (sub == 0x04) { // MTC0: COP0[rd] = rt
             e.load_gpr(9, rt);
-            e.str32(9, 0, OFF_COP0 + rd * 4); return false;
+            e.str32(9, 19, OFF_COP0 + rd * 4); return false;
         }
         if (fn == 0x10) { // RFE: Return From Exception
-            // RFE restores the bottom 2 bits (mode) of Status from SR
-            // COP0[12] = SR, COP0[13] = Cause, COP0[14] = EPC
-            e.ldr32(9, 0, OFF_COP0 + 12 * 4);  // Load SR
-            e.ldr32(10, 0, OFF_COP0 + 13 * 4);  // Load Cause
-            // Mode = SR[mode] >> 2, then shift SR mode bits right by 2 (KUp→KUo pattern)
-            // In R3000: SR[1:0] = mode, we shift right by 2 to get previous mode
+            e.ldr32(9, 19, OFF_COP0 + 12 * 4);  // Load SR
+            e.ldr32(10, 19, OFF_COP0 + 13 * 4);  // Load Cause
             e.ubfx(11, 9, 2, 2);   // W11 = SR.mode_prev (bits 2-3)
-            e.andr(9, 9, 10);       // Clear mode bits from SR (keep others)
+            e.andr(9, 9, 10);
             e.movi32(10, 0x3);
             e.mvn(10, 10);          // W10 = ~0x3
             e.andr(9, 9, 10);       // W9 = SR & ~0x3
             e.orr(9, 9, 11);        // W9 = (SR & ~0x3) | mode_prev
-            e.str32(9, 0, OFF_COP0 + 12 * 4);  // Store back to SR
+            e.str32(9, 19, OFF_COP0 + 12 * 4);  // Store back to SR
             return false;
         }
         return false;
@@ -277,6 +284,10 @@ static bool emit_r3k(E& e, uint32_t in, uint32_t pc) {
     default: LOGE("IOP op %02X @%08X", op, pc); return false;
     }
 }
+
+IOP_Recompiler::IOP_Recompiler(CodeCache& c, IOP_State& s, uint8_t* ram)
+    : m_cache(c), m_state(s), m_ram(ram) { g_iop_ram_ptr = ram; }
+void IOP_Recompiler::invalidate(uint32_t s, uint32_t e) { m_cache.invalidate_range(s, e); }
 
 IOP_Recompiler::CompiledBlock IOP_Recompiler::compile_block(uint32_t pc) {
     constexpr size_t MAX_CODE = 4096;
@@ -295,35 +306,35 @@ IOP_Recompiler::CompiledBlock IOP_Recompiler::compile_block(uint32_t pc) {
     for (uint32_t i = 0; i < MAX_INSNS; ++i) {
         uint32_t instr = iop_bus_read32(current_pc);
         bool term = emit_r3k(e, instr, current_pc);
-        
+
         if (term && !terminated) {
             terminated = true;
             branch_pc  = current_pc;
             current_pc += 4;
-            continue; // Ejecutar delay slot
+            continue; // delay slot
         }
         current_pc += 4;
-        if (terminated) break; // Bloque terminado
+        if (terminated) break;
     }
 
     if (!terminated) {
-        // Si no hubo branch, el PC simplemente avanza
         e.movi32(9, current_pc);
-        e.str32(9, 0, OFF_PC);
+        e.str32(9, 19, OFF_PC);
     } else {
-        // Si hubo branch, decidir si se tomó o no usando x19 y x20
-        e.movi32(10, branch_pc + 8); // Destino si NO se toma
-        e.cmp(20, 31);               // Comparar x20 con XZR
-        
-        // CSEL W9, W19, W10, NE -> Si x20 != 0, W9 = W19, si no W9 = W10
-        e.u32(0x1A800000u | (10 << 16) | (0x1 << 12) | (19 << 5) | 9);
-        e.str32(9, 0, OFF_PC);
+        // Branch epilogue: decide taken vs fall-through
+        // x22 = branch taken flag, x21 = branch target
+        e.movi32(10, branch_pc + 8); // fall-through PC
+        e.cmp(22, 31);               // CMP x22, XZR
+
+        // CSEL W9, W10, W21, NE -> if x22 != 0: W9 = W21 (target), else W9 = W10 (fall-through)
+        e.u32(0x1A800000u | (10 << 16) | (0x1 << 12) | (21 << 5) | 9);
+        e.str32(9, 19, OFF_PC);
     }
 
     e.epilogue();
 
     size_t code_size = size_t(e.p - code);
-    if (code_size > MAX_CODE) { LOGE("¡overrun! %zu > %zu", code_size, MAX_CODE); return nullptr; }
+    if (code_size > MAX_CODE) { LOGE("overrun! %zu > %zu", code_size, MAX_CODE); return nullptr; }
 
     __builtin___clear_cache(reinterpret_cast<char*>(code),
                             reinterpret_cast<char*>(e.p));
