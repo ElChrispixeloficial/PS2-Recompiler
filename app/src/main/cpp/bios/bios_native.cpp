@@ -214,9 +214,11 @@ bool PS2_BIOS::intercept_bios_call(uint32_t pc, uint32_t& new_pc) {
             new_pc = epc;
             break;
         }
-        case 3:  // Syscall - advance past SYSCALL instruction
-        case 4:  // Break - advance past BREAK instruction
-        case 5:  // Reserved Instruction - skip the unhandled instruction
+        case 3:  // Address Error (Load) — skip instruction
+        case 4:  // Address Error (Store) — skip instruction
+        case 5:  // Reserved Instruction — skip instruction
+        case 8:  // Syscall — advance past SYSCALL instruction
+        case 9:  // Break — advance past BREAK instruction
         case 10: // Watch
             g_ee_native->state.cop0[12] &= ~0x2u;
             new_pc = epc + 4;

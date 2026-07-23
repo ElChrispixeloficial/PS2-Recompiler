@@ -35,7 +35,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static constexpr const char* BUILD_VERSION = "v0.2.1-IOP-HLE+EXL-fix";
+static constexpr const char* BUILD_VERSION = "v0.2.2-exception-fix+IOP-HW";
 
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;

@@ -352,6 +352,10 @@ static int emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
 
         case FUNC_SYSCALL: {
             e.mov_imm32(9, pc); e.str32(9, 19, OFF_COP0 + 14*4);
+            e.ldr32(9, 19, OFF_COP0 + 13*4); e.mov_imm32(10, ~0x7Cu);
+            e.and64(9, 9, 10);
+            e.mov_imm32(10, 0x20u); // ExcCode=8 (Syscall) << 2 = 0x20
+            e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 13*4);
             e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 2);
             e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
             e.mov_imm32(21, 0x80000180u);
@@ -360,10 +364,12 @@ static int emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         }
         case FUNC_BREAK: {
             e.mov_imm32(9, pc); e.str32(9, 19, OFF_COP0 + 14*4);
-            e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 4);
-            e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
             e.ldr32(9, 19, OFF_COP0 + 13*4); e.mov_imm32(10, ~0x7Cu);
-            e.and64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 13*4);
+            e.and64(9, 9, 10);
+            e.mov_imm32(10, 0x24u); // ExcCode=9 (Break) << 2 = 0x24
+            e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 13*4);
+            e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 2); // EXL bit 1 (not bit 2)
+            e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
             e.mov_imm32(21, 0x80000180u);
             e.mov_imm32(20, 1);
             return 1;

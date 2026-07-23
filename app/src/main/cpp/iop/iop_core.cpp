@@ -14,23 +14,121 @@ extern "C" void push_jit_log(const char* msg);
 uint8_t* g_iop_ram_ptr = nullptr;
 uint32_t g_sif_buffer[1024]; 
 
+static uint32_t g_iop_intc_stat = 0;
+static uint32_t g_iop_intc_mask = 0;
+static uint32_t g_iop_dmac_dpcr = 0;
+static uint32_t g_iop_dmac_dicr = 0;
+static uint32_t g_iop_sif_mdma = 0;
+static uint32_t g_iop_sif_sema = 0;
+
+static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint32_t wval) {
+    // KSEG1 hardware registers: 0x1F800000 - 0x1F802FFF
+    if (addr < 0x1F800000u || addr > 0x1F802FFFu) return false;
+
+    switch (addr) {
+    case 0x1F801070: // IOP INTC_STAT
+        if (is_write) { g_iop_intc_stat &= ~wval; } // write-1-to-clear
+        else { *val = g_iop_intc_stat; }
+        return true;
+    case 0x1F801074: // IOP INTC_MASK
+        if (is_write) { g_iop_intc_mask = wval; }
+        else { *val = g_iop_intc_mask; }
+        return true;
+    case 0x1F8010F0: // IOP DMAC DPCR
+        if (is_write) { g_iop_dmac_dpcr = wval; }
+        else { *val = g_iop_dmac_dpcr; }
+        return true;
+    case 0x1F8010F4: // IOP DMAC DICR
+        if (is_write) { g_iop_dmac_dicr = (g_iop_dmac_dicr & ~wval) | (wval & 0x7F000000); }
+        else { *val = g_iop_dmac_dicr; }
+        return true;
+    case 0x1F801010: // IOP DMA channel 0 base (SIF0)
+    case 0x1F801020: // IOP DMA channel 1 base (SIF1)
+    case 0x1F801030: // IOP DMA channel 2 base (SIF2)
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F8010C0: case 0x1F8010C4: case 0x1F8010C8: case 0x1F8010CC: // DMA ch7-10
+    case 0x1F8010D0: case 0x1F8010D4: case 0x1F8010D8: case 0x1F8010DC:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801100: case 0x1F801104: // IOP timers 0-1
+    case 0x1F801110: case 0x1F801114: // IOP timers 2-3
+    case 0x1F801120: case 0x1F801124: // IOP timers 4-5
+    case 0x1F801130: case 0x1F801134: // IOP timers 6-7
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801200: // SIO_STAT
+        if (!is_write) *val = 0x05; // TX ready + TX finished
+        return true;
+    case 0x1F801204: case 0x1F801208: case 0x1F80120C: case 0x1F801210: // SIO regs
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801450: // SIF control
+        if (!is_write) *val = 0x1D000000; // EE-to-IOP SIF active
+        else { g_iop_sif_mdma = wval; }
+        return true;
+    case 0x1F801570: // SIF MDMA
+    case 0x1F801574: case 0x1F801578:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F80157C: // SIF semaphores
+        if (!is_write) *val = g_iop_sif_sema;
+        else { g_iop_sif_sema = wval; }
+        return true;
+    case 0x1F801140: case 0x1F801144: case 0x1F801148: case 0x1F80114C: // MISC DMA
+    case 0x1F801150: case 0x1F801154: case 0x1F801158: case 0x1F80115C:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F8010A0: case 0x1F8010A4: case 0x1F8010A8: case 0x1F8010AC: // SPU DMA
+    case 0x1F8010B0: case 0x1F8010B4: case 0x1F8010B8: case 0x1F8010BC:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801C00: case 0x1F801C04: case 0x1F801C08: case 0x1F801C0C: // SPU2
+    case 0x1F801C10: case 0x1F801C14: case 0x1F801C18: case 0x1F801C1C:
+    case 0x1F801C20: case 0x1F801C24: case 0x1F801C28: case 0x1F801C2C:
+    case 0x1F801C30: case 0x1F801C34: case 0x1F801C38: case 0x1F801C3C:
+    case 0x1F801C40: case 0x1F801C44: case 0x1F801C48: case 0x1F801C4C:
+    case 0x1F801C50: case 0x1F801C54: case 0x1F801C58: case 0x1F801C5C:
+    case 0x1F801C60: case 0x1F801C64: case 0x1F801C68: case 0x1F801C6C:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801D00: case 0x1F801D04: case 0x1F801D08: case 0x1F801D0C: // SPU2 core 1
+    case 0x1F801D10: case 0x1F801D14: case 0x1F801D18: case 0x1F801D1C:
+    case 0x1F801D20: case 0x1F801D24: case 0x1F801D28: case 0x1F801D2C:
+    case 0x1F801D30: case 0x1F801D34: case 0x1F801D38: case 0x1F801D3C:
+    case 0x1F801D40: case 0x1F801D44: case 0x1F801D48: case 0x1F801D4C:
+    case 0x1F801D50: case 0x1F801D54: case 0x1F801D58: case 0x1F801D5C:
+        if (!is_write) *val = 0;
+        return true;
+    case 0x1F801E00: // CDVD
+    case 0x1F801E80: // CDVD
+        if (!is_write) *val = 0;
+        return true;
+    default:
+        if (!is_write) *val = 0; // Unknown reg: read as 0
+        return true;
+    }
+}
+
 extern "C" {
     uint8_t iop_bus_read8(uint32_t addr) {
         if (!g_iop_ram_ptr) return 0;
-        // Mapear la dirección de la BIOS (0xBFC00000) al inicio de la RAM del IOP
         if (addr >= 0x1FC00000 && addr < 0x20000000) addr = (addr - 0x1FC00000) & (IOP_RAM_SIZE - 1);
+        else if (addr >= 0x1F800000u) { uint32_t v = 0; iop_hw_reg_handler(addr, &v, false, 0); return (uint8_t)v; }
         else addr &= (IOP_RAM_SIZE - 1);
         return g_iop_ram_ptr[addr];
     }
     uint16_t iop_bus_read16(uint32_t addr) {
         if (!g_iop_ram_ptr) return 0;
         if (addr >= 0x1FC00000 && addr < 0x20000000) addr = (addr - 0x1FC00000) & (IOP_RAM_SIZE - 1);
+        else if (addr >= 0x1F800000u) { uint32_t v = 0; iop_hw_reg_handler(addr, &v, false, 0); return (uint16_t)v; }
         else addr &= (IOP_RAM_SIZE - 1);
         return g_iop_ram_ptr[addr] | (g_iop_ram_ptr[addr + 1] << 8);
     }
     uint32_t iop_bus_read32(uint32_t addr) {
         if (!g_iop_ram_ptr) return 0;
         if (addr >= 0x1FC00000 && addr < 0x20000000) addr = (addr - 0x1FC00000) & (IOP_RAM_SIZE - 1);
+        else if (addr >= 0x1F800000u) { uint32_t v = 0; iop_hw_reg_handler(addr, &v, false, 0); return v; }
         else addr &= (IOP_RAM_SIZE - 1);
         return g_iop_ram_ptr[addr] | 
                (g_iop_ram_ptr[addr + 1] << 8) | 
@@ -39,17 +137,20 @@ extern "C" {
     }
     void iop_bus_write8(uint32_t addr, uint8_t val) {
         if (!g_iop_ram_ptr) return;
+        if (addr >= 0x1F800000u) { uint32_t dummy = 0; iop_hw_reg_handler(addr, &dummy, true, val); return; }
         addr &= (IOP_RAM_SIZE - 1);
         g_iop_ram_ptr[addr] = val;
     }
     void iop_bus_write16(uint32_t addr, uint16_t val) {
         if (!g_iop_ram_ptr) return;
+        if (addr >= 0x1F800000u) { uint32_t dummy = 0; iop_hw_reg_handler(addr, &dummy, true, val); return; }
         addr &= (IOP_RAM_SIZE - 1);
         g_iop_ram_ptr[addr] = val & 0xFF;
         g_iop_ram_ptr[addr + 1] = (val >> 8) & 0xFF;
     }
     void iop_bus_write32(uint32_t addr, uint32_t val) {
         if (!g_iop_ram_ptr) return;
+        if (addr >= 0x1F800000u) { uint32_t dummy = 0; iop_hw_reg_handler(addr, &dummy, true, val); return; }
         addr &= (IOP_RAM_SIZE - 1);
         g_iop_ram_ptr[addr]     = val & 0xFF;
         g_iop_ram_ptr[addr + 1] = (val >> 8) & 0xFF;
