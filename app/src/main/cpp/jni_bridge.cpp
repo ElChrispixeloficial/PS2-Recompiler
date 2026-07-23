@@ -35,6 +35,8 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
+static constexpr const char* BUILD_VERSION = "v0.2.1-IOP-HLE+EXL-fix";
+
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;
 DMA_Controller* g_dma_ptr = nullptr;
@@ -336,6 +338,7 @@ static void cpu_loop() {
     LOGI("CPU loop iniciado");
     uint32_t last_ee_pc = 0;
     int stuck_counter = 0;
+    int vblank_divider = 0;
 
     // Always initialize EE state via BIOS HLE (fast boot).
     // Previously this was skipped when g_bios_loaded=1, which left COP0,
@@ -350,7 +353,9 @@ static void cpu_loop() {
         if (!g_ee || !g_iop) break;
         
         g_ee->run_cycles(EE_CYCLES);
-        g_iop->run_cycles(EE_CYCLES / 8);
+        if (!g_iop->state.halted) {
+            g_iop->run_cycles(EE_CYCLES / 8);
+        }
         hw_tick(EE_CYCLES);
         
         g_ee_iters++;
@@ -369,29 +374,36 @@ static void cpu_loop() {
                     
                     snprintf(g_debug_text, sizeof(g_debug_text),
                         "[!] ALERTA: BUCLE INFINITO DETECTADO\n\n"
+                        "Build: %s\n"
                         "Checkpoint: EE_ATASCADO_EN_PC\n"
                         "EE PC: 0x%08X\nIOP PC: 0x%08X\n\n"
                         "Instruccion actual: 0x%08X\n"
                         "Siguiente instruccion: 0x%08X\n\n"
                         "--- LOGS JIT IOP ---\n%s\n"
                         "El JIT no sabe traducir esa instruccion.",
-                        current_ee_pc, current_iop_pc, stuck_instr, next_instr, g_jit_log_buffer);
+                        BUILD_VERSION, current_ee_pc, current_iop_pc, stuck_instr, next_instr, g_jit_log_buffer);
                 }
             } else {
                 stuck_counter = 0;
                 g_critical_alert = false;
                 snprintf(g_debug_text, sizeof(g_debug_text),
                     "[OK] SISTEMA EN EJECUCION\n\n"
+                    "Build: %s\n"
                     "EE PC: 0x%08X | IOP PC: 0x%08X\n"
                     "EE iters: %d | GS wr: %d | Vk draw: %d\n"
                     "--- LOG JIT IOP ---\n%s",
-                    current_ee_pc, current_iop_pc, g_ee_iters, g_gs_writes, g_vulkan_draws, g_jit_log_buffer);
+                    BUILD_VERSION, current_ee_pc, current_iop_pc, g_ee_iters, g_gs_writes, g_vulkan_draws, g_jit_log_buffer);
             }
             last_ee_pc = current_ee_pc;
         }
 
         if (g_window && g_gs) g_gs->vsync();
-        g_ee->raise_interrupt(2);
+        // Raise VBlank interrupt at ~60Hz (every ~16 iterations at 1ms sleep each)
+        vblank_divider++;
+        if (vblank_divider >= 16) {
+            vblank_divider = 0;
+            g_ee->raise_interrupt(2);
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     LOGI("CPU loop terminado");
@@ -404,20 +416,75 @@ static bool load_game(const char* path) {
         PS2_BIOS::set_game_entry(0x00100000);
         return true;
     }
+
+    // Try raw ELF file first
     FILE* f = fopen(path, "rb");
     if (f) {
         char magic[4];
         if (fread(magic,1,4,f) == 4 && magic[0]==0x7F && magic[1]=='E' && magic[2]=='L' && magic[3]=='F') {
-            fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
-            if (sz > 0x18 && fread(g_ee->get_ram(),1,(size_t)sz,f) > 0x18) {
-                fclose(f);
-                uint32_t entry = *(uint32_t*)(g_ee->get_ram()+0x18);
-                PS2_BIOS::set_game_entry(entry);
-                return true;
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fseek(f, 0, SEEK_SET);
+
+            if (sz < 0x34) { fclose(f); goto try_iso; }
+
+            // Read ELF header
+            uint8_t* elf_buf = (uint8_t*)malloc((size_t)sz);
+            if (!elf_buf) { fclose(f); goto try_iso; }
+            if ((long)fread(elf_buf, 1, (size_t)sz, f) != sz) { free(elf_buf); fclose(f); goto try_iso; }
+            fclose(f);
+
+            uint32_t elf_entry = *(uint32_t*)(elf_buf + 0x18);
+            uint16_t elf_phnum = *(uint16_t*)(elf_buf + 0x2C);
+            uint16_t elf_phentsize = *(uint16_t*)(elf_buf + 0x2E);
+            uint32_t elf_phoff = *(uint32_t*)(elf_buf + 0x1C);
+
+            LOGI("Raw ELF: entry=0x%08X phnum=%d phentsize=%d", elf_entry, elf_phnum, elf_phentsize);
+
+            if (elf_phnum > 0 && elf_phoff + (uint32_t)elf_phnum * elf_phentsize <= (uint32_t)sz) {
+                // Load each PT_LOAD segment to its correct p_vaddr
+                for (int i = 0; i < elf_phnum; i++) {
+                    uint32_t* phdr = (uint32_t*)(elf_buf + elf_phoff + i * elf_phentsize);
+                    uint32_t p_type   = phdr[0];
+                    uint32_t p_offset = phdr[1];
+                    uint32_t p_vaddr  = phdr[2];
+                    uint32_t p_filesz = phdr[4];
+                    uint32_t p_memsz  = phdr[5];
+
+                    if (p_type != 1) continue; // PT_LOAD = 1
+
+                    uint32_t dest = p_vaddr & 0x1FFFFFFFu;
+                    if (dest + p_memsz > EE_RAM_SIZE) {
+                        LOGE("ELF segment %d out of RAM: 0x%08X + 0x%X", i, dest, p_memsz);
+                        continue;
+                    }
+                    if (p_offset + p_filesz > (uint32_t)sz) {
+                        LOGE("ELF segment %d source overflow", i);
+                        continue;
+                    }
+
+                    if (p_filesz > 0)
+                        memcpy(g_ee->get_ram() + dest, elf_buf + p_offset, p_filesz);
+                    if (p_memsz > p_filesz)
+                        memset(g_ee->get_ram() + dest + p_filesz, 0, p_memsz - p_filesz);
+                    LOGI("ELF segment %d: vaddr=0x%08X -> RAM+0x%08X (%u bytes)", i, p_vaddr, dest, p_filesz);
+                }
+            } else {
+                // Fallback: dump entire ELF at offset 0 (works for simple PS2 ELFs)
+                LOGI("ELF: no program headers, dumping raw to RAM");
+                if ((size_t)sz > EE_RAM_SIZE) sz = EE_RAM_SIZE;
+                memcpy(g_ee->get_ram(), elf_buf, (size_t)sz);
             }
+
+            free(elf_buf);
+            PS2_BIOS::set_game_entry(elf_entry);
+            LOGI("Raw ELF loaded. Entry: 0x%08X", elf_entry);
+            return true;
         }
         fclose(f);
     }
+
+try_iso:
     auto r = ISO_Loader::load(path, g_ee->get_ram(), g_ee->ram_size());
     if (r.success) {
         PS2_BIOS::set_game_entry(r.entry_point);
@@ -515,13 +582,14 @@ Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeLoadISO(JNIEnv* env, job
         ee_mem_init(g_ee->get_ram(), EE_RAM_SIZE, g_ee->get_bios());
         memcpy(g_iop->get_ram(), s_bios_temp, IOP_RAM_SIZE);
         g_iop->state.pc = 0xBFC00000;
+        g_iop->state.halted = false;
         LOGI("[STEP] nativeLoadISO: BIOS injected, organic boot");
     } else {
         ee_mem_init(g_ee->get_ram(), EE_RAM_SIZE, nullptr);
-        g_iop->state.pc = 0;
-        LOGI("[STEP] nativeLoadISO: No BIOS loaded, EE mem init done");
+        g_iop->state.pc = 0xBFC00000;
+        g_iop->state.halted = true;
+        LOGI("[STEP] nativeLoadISO: No BIOS loaded, IOP kept HALTED (HLE mode)");
     }
-    g_iop->state.halted = false;
 
     g_init_phase = 6;
     snprintf(g_debug_text, sizeof(g_debug_text), "Phase 6: Vulkan\nwin=%p gs=%p", (void*)g_window, (void*)g_gs.get());

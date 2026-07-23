@@ -97,23 +97,21 @@ void PS2_BIOS::execute_hle() {
     ee_ram[0x0000F240 >> 2] = 0x00000001; // SIF.SIF_RPCInitialize
 
     // 2. Setup kernel structures in EE RAM
-    // Clear stack area
-    memset(g_ee_native->get_ram() + 0x00100000, 0, 0x00080000);
+    // Only clear the kernel stack area (low memory 0-64KB), NOT where game code lives
+    memset(g_ee_native->get_ram(), 0, 0x00010000);
 
     // 3. Setup COP0 registers
     // Status: BEV=1, ERL=1 (initial state after reset)
     g_ee_native->state.cop0[12] = 0x00000004; // Status: BEV=1
-    // PRId: R5900 revision
+    // PRId: R5900 revision (COP0 reg15 — note: EBASE is separate via Select register)
     g_ee_native->state.cop0[15] = 0x00002E20;
-    // EBASE: exception base address
-    g_ee_native->state.cop0[15] = 0x80000000;
 
     // 4. Setup TLB (minimal: map KSEG0/KSEG1 as unmapped)
     // These are handled by the address masking in ee_memory.h
 
     // 5. Setup Stack Pointer and Frame Pointer
     g_ee_native->state.gpr_lo[SP] = 0x01FFFFF0;
-    g_ee_native->state.gpr_lo[28] = 0x01FFFFF0; // GP (will be set by game)
+    g_ee_native->state.gpr_lo[GP] = 0; // GP will be set by game
 
     // 6. Clear return address
     g_ee_native->state.gpr_lo[RA] = 0;
@@ -124,6 +122,15 @@ void PS2_BIOS::execute_hle() {
     // 8. Jump to game entry point
     g_ee_native->state.pc = g_game_entry_point;
     LOGI("HLE boot: EE jumping to 0x%08X", g_game_entry_point);
+
+    // 9. Start IOP from BIOS ROM entry — it will run BIOS HLE stubs
+    //    (SetSifInit, GsInitGraph, etc.) and halt via Exit function.
+    //    CRITICAL: IOP must be alive for SIF communication with the game.
+    if (g_iop_native) {
+        g_iop_native->state.pc = 0xBFC00000;
+        g_iop_native->state.halted = false;
+        LOGI("HLE boot: IOP started at 0xBFC00000 (BIOS HLE active)");
+    }
 
     g_bios_initialized = true;
 }
@@ -163,21 +170,81 @@ void PS2_BIOS::execute_lle() {
 
 // ─── BIOS function interception ──────────────────────────────────────────────
 bool PS2_BIOS::intercept_bios_call(uint32_t pc, uint32_t& new_pc) {
-    // Check if PC is in BIOS function area (KSEG1: 0xBFC00000-0xBFC03FFF)
-    // or physical BIOS ROM area (0x00000000-0x00003FFF)
+    // Check if PC is in BIOS address range:
+    //   KSEG1 BIOS ROM:  0xBFC00000-0xBFCFFFFF  (mapped from physical 0x1FC00000)
+    //   KSEG0 BIOS kernel in RAM: 0x80000000-0x803FFFFF (copied from ROM during real boot)
+    //
+    // NOTE: We do NOT intercept addresses < 0x00400000 because that range is
+    // EE RAM where game code is loaded (e.g., ELF at 0x00100000). Treating
+    // game code as BIOS functions would NOP every instruction.
     uint32_t bios_offset = 0;
-    if (pc >= 0xBFC00000u && pc < 0xBFC04000u) {
+    if (pc >= 0xBFC00000u && pc < 0xC0000000u) {
         bios_offset = pc - 0xBFC00000u;
-    } else if (pc < 0x00004000u) {
-        bios_offset = pc;
+    } else if (pc >= 0x80000000u && pc < 0x80400000u) {
+        bios_offset = pc - 0x80000000u;
     } else {
         return false;
     }
 
     switch (bios_offset) {
+    // ── R5900 Exception vectors (KSEG0 offsets) ──────────────────────────
+    // Only intercept these when EXL bit is set (actual exception in progress).
+    // If EXL=0, the game jumped here intentionally — let the JIT execute.
+    case 0x000: // TLB Refill handler at 0x80000000
+    case 0x170: { // TLB Refill (alternate)
+        if (!(g_ee_native->state.cop0[12] & 0x2u)) return false; // EXL not set
+        LOGI("BIOS HLE: TLB Refill (offset 0x%03X) -> ERET to EPC=0x%08X", bios_offset, g_ee_native->state.cop0[14]);
+        g_ee_native->state.cop0[12] &= ~0x2u; // Clear EXL
+        new_pc = g_ee_native->state.cop0[14]; // Return to EPC
+        return true;
+    }
+    case 0x180: { // General Exception handler at 0x80000180
+        if (!(g_ee_native->state.cop0[12] & 0x2u)) return false; // EXL not set
+        uint32_t cause = g_ee_native->state.cop0[13];
+        uint32_t exc_code = (cause >> 2) & 0x1F;
+        uint32_t epc = g_ee_native->state.cop0[14];
+        LOGI("BIOS HLE: General Exception ExcCode=%u EPC=0x%08X", exc_code, epc);
+        switch (exc_code) {
+        case 0: { // Interrupt
+            uint32_t status = g_ee_native->state.cop0[12];
+            uint32_t pending = (cause >> 8) & (status >> 8) & 0xFF;
+            cause &= ~(pending << 8);
+            g_ee_native->state.cop0[13] = cause;
+            g_ee_native->state.cop0[12] = status & ~0x2u;
+            new_pc = epc;
+            break;
+        }
+        case 3:  // Syscall - advance past SYSCALL instruction
+        case 4:  // Break - advance past BREAK instruction
+        case 5:  // Reserved Instruction - skip the unhandled instruction
+        case 10: // Watch
+            g_ee_native->state.cop0[12] &= ~0x2u;
+            new_pc = epc + 4;
+            break;
+        default: // For any other exception, skip instruction to avoid infinite loop
+            LOGI("BIOS HLE: Unhandled ExcCode=%u at EPC=0x%08X, skipping", exc_code, epc);
+            g_ee_native->state.cop0[12] &= ~0x2u;
+            new_pc = epc + 4;
+            break;
+        }
+        return true;
+    }
+    case 0x200: { // Interrupt handler at 0x80000200
+        if (!(g_ee_native->state.cop0[12] & 0x2u)) return false; // EXL not set
+        uint32_t cause = g_ee_native->state.cop0[13];
+        uint32_t status = g_ee_native->state.cop0[12];
+        uint32_t pending = (cause >> 8) & (status >> 8) & 0xFF;
+        cause &= ~(pending << 8);
+        g_ee_native->state.cop0[13] = cause;
+        g_ee_native->state.cop0[12] = status & ~0x2u;
+        new_pc = g_ee_native->state.cop0[14];
+        return true;
+    }
+
+    // ── Known BIOS library functions (offsets same in ROM and RAM copy) ──
     case BIOS_FN_SetGsCrt:
         LOGI("BIOS HLE: SetGsCrt -> NOP");
-        new_pc = pc + 8; // Skip delay slot
+        new_pc = pc + 8;
         return true;
     case BIOS_FN_GsResetGraph:
         LOGI("BIOS HLE: GsResetGraph -> NOP");
@@ -197,7 +264,7 @@ bool PS2_BIOS::intercept_bios_call(uint32_t pc, uint32_t& new_pc) {
         return true;
     case BIOS_FN_SifLoadModule:
         LOGI("BIOS HLE: SifLoadModule -> NOP (return 1)");
-        g_ee_native->state.gpr_lo[2] = 1; // return success
+        g_ee_native->state.gpr_lo[2] = 1;
         new_pc = pc + 8;
         return true;
     case BIOS_FN_SifExecModuleBuffer:
@@ -205,8 +272,26 @@ bool PS2_BIOS::intercept_bios_call(uint32_t pc, uint32_t& new_pc) {
         g_ee_native->state.gpr_lo[2] = 1;
         new_pc = pc + 8;
         return true;
+    case BIOS_FN_SetVTLBRefillHandler:
+        LOGI("BIOS HLE: SetVTLBRefillHandler -> NOP");
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_SetVCommonHandler:
+        LOGI("BIOS HLE: SetVCommonHandler -> NOP");
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_GsInitGraph:
+        LOGI("BIOS HLE: GsInitGraph -> NOP");
+        new_pc = pc + 8;
+        return true;
+    case BIOS_FN_AddSifDmaHandler:
+        LOGI("BIOS HLE: AddSifDmaHandler -> NOP (return 0)");
+        g_ee_native->state.gpr_lo[2] = 0;
+        new_pc = pc + 8;
+        return true;
     default:
-        if (bios_offset < 0x4000) {
+        // NOP out any BIOS function in the kernel ROM/RAM area (up to 256KB)
+        if (bios_offset < 0x40000) {
             LOGI("BIOS HLE: Unknown function at offset 0x%04X (PC=0x%08X) -> NOP", bios_offset, pc);
             new_pc = pc + 8;
             return true;

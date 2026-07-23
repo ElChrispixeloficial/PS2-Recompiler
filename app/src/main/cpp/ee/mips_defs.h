@@ -73,6 +73,7 @@ enum MipsOpcode : uint8_t {
 // ─── Funciones Especiales (op=0x00, bits 5-0) ──────────────────────────────
 enum MipsFunc : uint8_t {
     FUNC_SLL    = 0x00,
+    FUNC_MOVF   = 0x01,
     FUNC_SRL    = 0x02,
     FUNC_SRA    = 0x03,
     FUNC_SLLV   = 0x04,
@@ -80,6 +81,8 @@ enum MipsFunc : uint8_t {
     FUNC_SRAV   = 0x07,
     FUNC_JR     = 0x08,
     FUNC_JALR   = 0x09,
+    FUNC_MOVZ   = 0x0A,
+    FUNC_MOVN   = 0x0B,
     FUNC_MFHI   = 0x10,
     FUNC_MTHI   = 0x11,
     FUNC_MFLO   = 0x12,

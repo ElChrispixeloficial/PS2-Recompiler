@@ -241,13 +241,15 @@ static uint64_t ee_mem_read64(uint32_t a) { return uint64_t(ee_mem_read32(a)) | 
 static void     ee_mem_write64(uint32_t a, uint64_t v) { ee_mem_write32(a, uint32_t(v)); ee_mem_write32(a+4, uint32_t(v>>32)); }
 static void     ee_mem_read128_wrapper(uint32_t a, uint8_t* out) { ee_mem_read128(a, out); }
 static void     ee_mem_write128_wrapper(uint32_t a, const uint8_t* in) { ee_mem_write128(a, in); }
+static uint64_t ee_movz(uint64_t rs_val, uint64_t rt_val, uint64_t rd_val) { return rt_val == 0 ? rs_val : rd_val; }
+static uint64_t ee_movn(uint64_t rs_val, uint64_t rt_val, uint64_t rd_val) { return rt_val != 0 ? rs_val : rd_val; }
 
 static void emit_ill_insn(Emitter& e, uint32_t pc, uint32_t insn) {
     LOGE("Instruccion no traducida @%08X (insn=%08X) -> FORZANDO EXC_RI", pc, insn);
     e.mov_imm32(9, pc); e.str32(9, 19, OFF_COP0 + 14*4); 
     e.ldr32(9, 19, OFF_COP0 + 13*4); e.mov_imm32(10, ~0x7Cu);
     e.and64(9, 9, 10); 
-    e.mov_imm32(10, 0x40u); // 0x10 (RI) << 2 = 0x40
+    e.mov_imm32(10, 0x14u); // ExcCode=5 (RI) << 2 = 0x14
     e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 13*4);
     e.ldr32(9, 19, OFF_COP0 + 12*4); e.mov_imm32(10, 2);
     e.orr64(9, 9, 10); e.str32(9, 19, OFF_COP0 + 12*4);
@@ -282,6 +284,16 @@ static int emit_mips(Emitter& e, uint32_t insn, uint32_t pc) {
         case FUNC_NOR: e.load_gpr(9, rs); e.load_gpr(10, rt); e.orr64(9, 9, 10); e.mvn64(9, 9); e.store_gpr(9, rd); return 0;
         case FUNC_SLT: e.load_gpr(9, rs); e.load_gpr(10, rt); e.cmp64(9, 10); e.cset64(9, 0xB); e.store_gpr(9, rd); return 0;
         case FUNC_SLTU:e.load_gpr(9, rs); e.load_gpr(10, rt); e.cmp64(9, 10); e.cset64(9, 0x3); e.store_gpr(9, rd); return 0;
+        case FUNC_MOVZ: { // MOVZ rd,rs,rt: if rt==0 then rd=rs, else rd unchanged
+            e.load_gpr(0, rs); e.load_gpr(1, rt); e.load_gpr(2, rd);
+            e.call((void*)ee_movz);
+            e.store_gpr(0, rd); return 0;
+        }
+        case FUNC_MOVN: { // MOVN rd,rs,rt: if rt!=0 then rd=rs, else rd unchanged
+            e.load_gpr(0, rs); e.load_gpr(1, rt); e.load_gpr(2, rd);
+            e.call((void*)ee_movn);
+            e.store_gpr(0, rd); return 0;
+        }
         case FUNC_DADD: case FUNC_DADDU:
             e.load_gpr(9, rs); e.load_gpr(10, rt); e.add64(9, 9, 10); e.store_gpr(9, rd); return 0;
         case FUNC_DSUB: case FUNC_DSUBU:

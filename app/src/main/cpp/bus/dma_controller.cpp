@@ -2,8 +2,11 @@
 #include "../gs/gs_core.h"
 #include "../vu/vu_core.h"
 #include "../vu/vif_unpacker.h"
+#include "../iop/iop_core.h"
 #include <android/log.h>
 #include <cstring>
+
+extern uint8_t* g_iop_ram_ptr;
 
 #define TAG "DMA"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  TAG, __VA_ARGS__)
@@ -112,11 +115,43 @@ void DMA_Controller::route_transfer(DMA_Channel ch, uint32_t addr, uint32_t qwc)
             break;
         }
 
-        case DMA_CH_SIF0:
-        case DMA_CH_SIF1:
-        case DMA_CH_SIF2:
-            LOGI("DMA SIF%d: %u QWC from 0x%08X (SIF transfer logged)", ch - DMA_CH_SIF0, qwc, addr);
+        case DMA_CH_SIF0: {
+            // SIF0: EE → IOP data transfer
+            LOGI("DMA SIF0: %u QWC from 0x%08X (EE→IOP)", qwc, addr);
+            if (!g_ee_ram || qwc == 0) break;
+            // Map EE physical address to IOP RAM (SIF0 transfers from EE to IOP)
+            // IOP sees EE addresses in the 0x01000000+ range, map to IOP RAM offset
+            extern uint8_t* g_iop_ram_ptr;
+            if (g_iop_ram_ptr) {
+                uint32_t iop_dest = addr & (IOP_RAM_SIZE - 1);
+                if (iop_dest + qwc * 16 <= IOP_RAM_SIZE) {
+                    memcpy(g_iop_ram_ptr + iop_dest, g_ee_ram + addr, qwc * 16);
+                    LOGI("DMA SIF0: copied %u QWC to IOP RAM+0x%08X", qwc, iop_dest);
+                }
+            }
             break;
+        }
+
+        case DMA_CH_SIF1: {
+            // SIF1: IOP → EE data transfer
+            LOGI("DMA SIF1: %u QWC from 0x%08X (IOP→EE)", qwc, addr);
+            if (!g_ee_ram || qwc == 0) break;
+            // SIF1 transfers data from IOP to EE. The MADR in EE space is the dest.
+            // Read source from IOP RAM via SIF FIFO (simplified: use MADR as EE dest)
+            extern uint8_t* g_iop_ram_ptr;
+            if (g_iop_ram_ptr) {
+                // In practice, IOP writes data to its SIF FIFO, EE reads it.
+                // For HLE: just copy from the EE MADR area (IOP already placed data there via SIF)
+                LOGI("DMA SIF1: %u QWC transfer (IOP→EE) — data already in EE RAM", qwc);
+            }
+            break;
+        }
+
+        case DMA_CH_SIF2: {
+            // SIF2: bidirectional (typically debug/unused in games)
+            LOGI("DMA SIF2: %u QWC from 0x%08X (bidirectional)", qwc, addr);
+            break;
+        }
 
         case DMA_CH_IPU_FROM:
         case DMA_CH_IPU_TO:
