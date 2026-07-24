@@ -62,6 +62,14 @@ set(SOURCES
     # BIOS
     bios/bios_native.cpp
 
+    # AOT Ahead-of-Time recompiler
+    aot/elf_analyzer.cpp
+    aot/mips_translator.cpp
+    aot/hw_module_gen.cpp
+    aot/asset_processor.cpp
+    aot/project_generator.cpp
+    aot/aot_pipeline.cpp
+
     # Input (DualShock 2)
     input/dualshock.cpp
 )

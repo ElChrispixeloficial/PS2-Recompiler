@@ -278,14 +278,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // Selector de metodo de recompilacion antes de lanzar
         val methods = arrayOf(
-            "JIT RECOMPILER (Estable)",
+            "JIT (Estable)",
             "AOT (Experimental)"
         )
         MaterialAlertDialogBuilder(this)
-            .setTitle("Metodo de Recompilacion")
-            .setMessage("Selecciona el metodo para: ${game.title}")
+            .setTitle("Selecciona el modo de recompilación")
             .setItems(methods) { _, which ->
                 val mode = if (which == 0) "jit" else "aot"
                 startGameWithMode(game, mode)

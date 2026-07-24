@@ -15,6 +15,7 @@
 #include "homebrew/pr2_homebrew.h"
 #include "spu2/spu2_core.h"
 #include "bus/memory_map.h"
+#include "aot/aot_pipeline.h"
 
 #include <jni.h>
 #include <android/native_window_jni.h>
@@ -981,5 +982,54 @@ JNIEXPORT jstring JNICALL Java_com_chrispixel_ps2recompiler_TestActivity_nativeT
 JNIEXPORT jstring JNICALL Java_com_chrispixel_ps2recompiler_TestActivity_nativeTestVulkan(JNIEnv* e,jobject){return e->NewStringUTF("✅ Vulkan OK");}
 JNIEXPORT jstring JNICALL Java_com_chrispixel_ps2recompiler_TestActivity_nativeTestGs(JNIEnv* e,jobject){if(g_gs){g_gs->write_reg(0x00,3);return e->NewStringUTF("✅ GS OK");}return e->NewStringUTF("❌ GS nulo");}
 JNIEXPORT jstring JNICALL Java_com_chrispixel_ps2recompiler_TestActivity_nativeTestRun(JNIEnv* e,jobject){return e->NewStringUTF("╔══════════════╗\n║ SISTEMA LISTO ║\n╚══════════════╝");}
+
+JNIEXPORT jboolean JNICALL
+Java_com_chrispixel_ps2recompiler_RuntimeActivity_nativeRunAOT(JNIEnv* env, jobject, jstring jiso_path, jstring jout_dir) {
+    const char* iso_path = env->GetStringUTFChars(jiso_path, nullptr);
+    const char* out_dir = env->GetStringUTFChars(jout_dir, nullptr);
+    LOGI("[AOT] Starting AOT pipeline: iso=%s out=%s", iso_path, out_dir);
+
+    if (!g_ee) {
+        LOGE("[AOT] EE_Core not initialized");
+        env->ReleaseStringUTFChars(jiso_path, iso_path);
+        env->ReleaseStringUTFChars(jout_dir, out_dir);
+        return JNI_FALSE;
+    }
+
+    AOT_Pipeline pipeline;
+    auto result = pipeline.run(iso_path, out_dir, g_ee->get_ram(), g_ee->ram_size(),
+        [](int phase, const std::string& msg, int pct) {
+            LOGI("[AOT] Phase %d: %s (%d%%)", phase, msg.c_str(), pct);
+            snprintf(g_debug_text, sizeof(g_debug_text),
+                "[AOT] Phase %d/6\n%s\n%d%%", phase, msg.c_str(), pct);
+        });
+
+    LOGI("[AOT] Pipeline %s: funcs=%u tex=%u audio=%u models=%u",
+         result.success ? "SUCCESS" : "FAILED",
+         result.functions_translated, result.textures_extracted,
+         result.audio_clips_extracted, result.models_extracted);
+
+    if (result.success) {
+        snprintf(g_debug_text, sizeof(g_debug_text),
+            "[AOT] DONE\n"
+            "Project: %s\n"
+            "Functions: %u\n"
+            "Textures: %u\n"
+            "Audio: %u\n"
+            "Models: %u",
+            result.project_dir.c_str(),
+            result.functions_translated,
+            result.textures_extracted,
+            result.audio_clips_extracted,
+            result.models_extracted);
+    } else {
+        snprintf(g_debug_text, sizeof(g_debug_text),
+            "[AOT] ERROR:\n%s", result.error.c_str());
+    }
+
+    env->ReleaseStringUTFChars(jiso_path, iso_path);
+    env->ReleaseStringUTFChars(jout_dir, out_dir);
+    return result.success ? JNI_TRUE : JNI_FALSE;
+}
 
 } // extern "C"

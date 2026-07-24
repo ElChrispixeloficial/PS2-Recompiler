@@ -44,6 +44,7 @@ class RuntimeActivity : AppCompatActivity() {
     private external fun nativeGetFps(): Int
     private external fun nativeGetDebugInfo(): String
     private external fun nativeIsAlertActive(): Boolean
+    private external fun nativeRunAOT(isoPath: String, outDir: String): Boolean
 
     private lateinit var binding: ActivityRuntimeBinding
     private var isoPath   = ""
@@ -187,33 +188,78 @@ class RuntimeActivity : AppCompatActivity() {
         binding.tvLoadingStatus.text = getString(R.string.game_loading)
         binding.tvLoadingDetail.text = try { java.net.URLDecoder.decode(isoPath.substringAfterLast('/'), "UTF-8") } catch (_: Exception) { isoPath.substringAfterLast('/') }
         
+        if (recompMode == "aot") {
+            binding.tvLoadingStatus.text = "AOT: Analizando ELF..."
+            binding.tvLoadingDetail.text = "Recompilación estática en progreso"
+        }
+
         lifecycleScope.launch(Dispatchers.IO) {
-            // 1. Cargar la BIOS pasada desde MainActivity
-            val biosPath = intent.getStringExtra("bios_path")
-            var biosLoaded = false
-            if (!biosPath.isNullOrEmpty()) {
-                try { biosLoaded = nativeLoadBIOS(biosPath) } catch (_: Exception) {}
-            }
-            
-            // 2. Cargar el juego
-            val ok = try { nativeLoadISO(isoPath) } catch (_: Exception) { false }
-            
-            withContext(Dispatchers.Main) {
-                if (ok) {
-                    binding.tvLoadingStatus.text = getString(R.string.game_compiling)
-                    delay(300)
-                    binding.layoutLoading.visibility = View.GONE
-                    isLoaded = true; nativeResume(); fpsLoop(); showHud()
-                    if (!biosLoaded) {
-                        Snackbar.make(binding.root, "Falta BIOS oficial. Modo HLE activado.", Snackbar.LENGTH_LONG).show()
+            if (recompMode == "aot") {
+                // AOT mode: run static recompilation pipeline
+                val outDir = File(cacheDir, "aot_output")
+                outDir.mkdirs()
+                withContext(Dispatchers.Main) { binding.tvLoadingStatus.text = "AOT: Fase 1/6 - Analizando..." }
+                try {
+                    val aotOk = nativeLoadISO(isoPath)
+                    if (aotOk) {
+                        withContext(Dispatchers.Main) { binding.tvLoadingStatus.text = "AOT: Traduciendo MIPS → C++..." }
+                        val ok = nativeRunAOT(isoPath, outDir.absolutePath)
+                        withContext(Dispatchers.Main) {
+                            if (ok) {
+                                binding.layoutLoading.visibility = View.GONE
+                                isLoaded = true; nativeResume(); fpsLoop(); showHud()
+                                Snackbar.make(binding.root, "AOT completado. Proyecto en: ${outDir.absolutePath}", Snackbar.LENGTH_INDEFINITE)
+                                    .setAction("OK") { }.show()
+                            } else {
+                                binding.progressLoading.visibility = View.GONE
+                                binding.tvLoadingStatus.text = "AOT: Error en recompilación"
+                                val debugInfo = nativeGetDebugInfo()
+                                Snackbar.make(binding.root, "Error AOT. Ver debug.", Snackbar.LENGTH_INDEFINITE)
+                                    .setAction("Copiar") {
+                                        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("AOT Error", debugInfo))
+                                    }.show()
+                            }
+                        }
                     } else {
-                        Snackbar.make(binding.root, "BIOS oficial cargada. Arranque organico.", Snackbar.LENGTH_SHORT).show()
+                        withContext(Dispatchers.Main) {
+                            binding.tvLoadingStatus.text = getString(R.string.error_load_iso)
+                        }
                     }
-                } else {
-                    binding.progressLoading.visibility = View.GONE
-                    binding.tvLoadingStatus.text = getString(R.string.error_load_iso)
-                    Snackbar.make(binding.root, R.string.error_load_iso, Snackbar.LENGTH_INDEFINITE)
-                        .setAction("Salir") { finish() }.show()
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        binding.tvLoadingStatus.text = "AOT Error: ${e.message}"
+                    }
+                }
+            } else {
+                // JIT mode: standard load
+                // 1. Cargar la BIOS pasada desde MainActivity
+                val biosPath = intent.getStringExtra("bios_path")
+                var biosLoaded = false
+                if (!biosPath.isNullOrEmpty()) {
+                    try { biosLoaded = nativeLoadBIOS(biosPath) } catch (_: Exception) {}
+                }
+                
+                // 2. Cargar el juego
+                val ok = try { nativeLoadISO(isoPath) } catch (_: Exception) { false }
+                
+                withContext(Dispatchers.Main) {
+                    if (ok) {
+                        binding.tvLoadingStatus.text = getString(R.string.game_compiling)
+                        delay(300)
+                        binding.layoutLoading.visibility = View.GONE
+                        isLoaded = true; nativeResume(); fpsLoop(); showHud()
+                        if (!biosLoaded) {
+                            Snackbar.make(binding.root, "Falta BIOS oficial. Modo HLE activado.", Snackbar.LENGTH_LONG).show()
+                        } else {
+                            Snackbar.make(binding.root, "BIOS oficial cargada. Arranque organico.", Snackbar.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        binding.progressLoading.visibility = View.GONE
+                        binding.tvLoadingStatus.text = getString(R.string.error_load_iso)
+                        Snackbar.make(binding.root, R.string.error_load_iso, Snackbar.LENGTH_INDEFINITE)
+                            .setAction("Salir") { finish() }.show()
+                    }
                 }
             }
         }
