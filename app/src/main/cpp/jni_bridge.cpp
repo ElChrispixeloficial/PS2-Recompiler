@@ -36,7 +36,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static constexpr const char* BUILD_VERSION = "v0.2.6-BIOS256K+relaxed-stuck";
+static constexpr const char* BUILD_VERSION = "v0.2.7-diagnostics+COP0";
 
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;
@@ -390,7 +390,7 @@ static void cpu_loop() {
         }
         // When IOP is stuck AND EE is stuck for a long time, write SIF flags to
         // EE RAM so the game can progress.
-        if (iop_forced_halt && stuck_counter > 500) {
+        if (iop_forced_halt && stuck_counter > 100) {
             extern SIF_Bus g_sif_bus;
             extern uint8_t* g_ee_ram;
             g_sif_bus.smflg |= 0x01;
@@ -401,9 +401,8 @@ static void cpu_loop() {
                 *(uint32_t*)(g_ee_ram + 0xF200) = 0x00010000;
             }
         }
-        // GPR dump when EE is stuck for a while — fires independently of IOP state.
-        // This lets us see what address the game is polling.
-        if (stuck_counter == 500 || stuck_counter == 5000) {
+        // GPR dump when EE is stuck — fires quickly (stuck_counter == 30 = ~450 iters)
+        if (stuck_counter == 30 || stuck_counter == 300 || stuck_counter == 3000) {
             uint32_t epc = g_ee->state.pc;
             uint32_t instr = g_ee->read32(epc);
             uint32_t next = g_ee->read32(epc + 4);
@@ -417,13 +416,23 @@ static void cpu_loop() {
                  (uint32_t)g_ee->state.gpr_lo[10], (uint32_t)g_ee->state.gpr_lo[11],
                  (uint32_t)g_ee->state.gpr_lo[12], (uint32_t)g_ee->state.gpr_lo[13],
                  (uint32_t)g_ee->state.gpr_lo[16], (uint32_t)g_ee->state.gpr_lo[17]);
-            LOGI("GPR: sp=0x%08X ra=0x%08X gp=0x%08X", 
+            LOGI("GPR: sp=0x%08X ra=0x%08X gp=0x%08X",
                  (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31],
                  (uint32_t)g_ee->state.gpr_lo[28]);
+            // Dump COP0 Status/Cause to see if waiting for IRQ
+            uint32_t cop0_status = 0, cop0_cause = 0;
+            if (g_ee) {
+                cop0_status = g_ee->state.cop0[12]; // Status
+                cop0_cause = g_ee->state.cop0[13];  // Cause
+            }
+            LOGI("COP0: Status=0x%08X Cause=0x%08X (IE=%d EXL=%d ERL=%d IM=0x%02X)",
+                 cop0_status, cop0_cause,
+                 (cop0_status & 1), (cop0_status >> 1) & 1, (cop0_status >> 2) & 1,
+                 (cop0_status >> 8) & 0xFF);
             uint32_t t1_val = (uint32_t)g_ee->state.gpr_lo[9];
             extern uint8_t* g_ee_ram;
             if (t1_val && t1_val < 0x02000000 && g_ee_ram) {
-                LOGI("Mem at t1+4 (0x%08X): %08X %08X %08X %08X", t1_val+4,
+                LOGI("Mem[t1+4](0x%08X): %08X %08X %08X %08X", t1_val+4,
                      *(uint32_t*)(g_ee_ram + t1_val + 4),
                      *(uint32_t*)(g_ee_ram + t1_val + 8),
                      *(uint32_t*)(g_ee_ram + t1_val + 12),
@@ -435,37 +444,37 @@ static void cpu_loop() {
         if (g_ee_iters % 15 == 0) { 
             uint32_t current_ee_pc = g_ee->state.pc;
             uint32_t current_iop_pc = g_iop->state.pc;
+            uint32_t stuck_instr = g_ee->read32(current_ee_pc);
+            uint32_t next_instr = g_ee->read32(current_ee_pc + 4);
 
             if (current_ee_pc == last_ee_pc) {
                 stuck_counter++;
-                if (stuck_counter > 50000) { 
-                    g_critical_alert = true;
-                    
-                    uint32_t stuck_instr = g_ee->read32(current_ee_pc);
-                    uint32_t next_instr = g_ee->read32(current_ee_pc + 4);
-                    
-                    snprintf(g_debug_text, sizeof(g_debug_text),
-                        "[*] EE ESPERANDO (polling)\n\n"
-                        "Build: %s\n"
-                        "EE PC: 0x%08X | IOP PC: 0x%08X\n"
-                        "Itrs: %d | IOP halt: %d\n\n"
-                        "Instr: 0x%08X\n"
-                        "Siguiente: 0x%08X\n\n"
-                        "--- IOP LOG ---\n%s",
-                        BUILD_VERSION, current_ee_pc, current_iop_pc,
-                        g_ee_iters, iop_forced_halt ? 1 : 0,
-                        stuck_instr, next_instr, g_jit_log_buffer);
-                }
+                g_critical_alert = true;
+                snprintf(g_debug_text, sizeof(g_debug_text),
+                    "[*] EE ESPERANDO\n\n"
+                    "Build: %s\n"
+                    "EE PC: 0x%08X | IOP: 0x%08X\n"
+                    "Itrs: %d | GS: %d | Vk: %d\n"
+                    "Stuck: %d | IOP halt: %d\n\n"
+                    "Instr: 0x%08X\nNext: 0x%08X\n\n"
+                    "--- IOP ---\n%s",
+                    BUILD_VERSION, current_ee_pc, current_iop_pc,
+                    g_ee_iters, g_gs_writes, g_vulkan_draws,
+                    stuck_counter, iop_forced_halt ? 1 : 0,
+                    stuck_instr, next_instr, g_jit_log_buffer);
             } else {
                 stuck_counter = 0;
                 g_critical_alert = false;
                 snprintf(g_debug_text, sizeof(g_debug_text),
                     "[OK] SISTEMA EN EJECUCION\n\n"
                     "Build: %s\n"
-                    "EE PC: 0x%08X | IOP PC: 0x%08X\n"
-                    "EE iters: %d | GS wr: %d | Vk draw: %d\n"
-                    "--- LOG JIT IOP ---\n%s",
-                    BUILD_VERSION, current_ee_pc, current_iop_pc, g_ee_iters, g_gs_writes, g_vulkan_draws, g_jit_log_buffer);
+                    "EE: 0x%08X | IOP: 0x%08X\n"
+                    "Itrs: %d | GS: %d | Vk: %d\n\n"
+                    "Instr: 0x%08X\n\n"
+                    "--- IOP ---\n%s",
+                    BUILD_VERSION, current_ee_pc, current_iop_pc,
+                    g_ee_iters, g_gs_writes, g_vulkan_draws,
+                    stuck_instr, g_jit_log_buffer);
             }
             last_ee_pc = current_ee_pc;
         }
