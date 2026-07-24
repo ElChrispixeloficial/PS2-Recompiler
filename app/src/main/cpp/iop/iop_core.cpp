@@ -14,12 +14,13 @@ extern "C" void push_jit_log(const char* msg);
 uint8_t* g_iop_ram_ptr = nullptr;
 uint32_t g_sif_buffer[1024]; 
 
-static uint32_t g_iop_intc_stat = 0;
-static uint32_t g_iop_intc_mask = 0;
-static uint32_t g_iop_dmac_dpcr = 0;
-static uint32_t g_iop_dmac_dicr = 0;
-static uint32_t g_iop_sif_mdma = 0;
-static uint32_t g_iop_sif_sema = 0;
+// IOP HW register state (extern-visible for VBlank interrupt firing)
+uint32_t g_iop_intc_stat = 0;
+uint32_t g_iop_intc_mask = 0;
+uint32_t g_iop_dmac_dpcr = 0;
+uint32_t g_iop_dmac_dicr = 0;
+uint32_t g_iop_sif_mdma = 0;
+uint32_t g_iop_sif_sema = 0;
 
 static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint32_t wval) {
     // KSEG1 hardware registers: 0x1F800000 - 0x1F802FFF
@@ -39,8 +40,13 @@ static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint
         else { *val = g_iop_dmac_dpcr; }
         return true;
     case 0x1F8010F4: // IOP DMAC DICR
-        if (is_write) { g_iop_dmac_dicr = (g_iop_dmac_dicr & ~wval) | (wval & 0x7F000000); }
-        else { *val = g_iop_dmac_dicr; }
+        if (is_write) {
+            // When IOP writes to DICR (typically to start DMA or enable interrupts),
+            // set bit 31 (FORCE = "DMA finished") so polling loops can proceed.
+            g_iop_dmac_dicr = (g_iop_dmac_dicr & ~wval) | (wval & 0x7F000000) | 0x80000000u;
+        } else {
+            *val = g_iop_dmac_dicr;
+        }
         return true;
     case 0x1F801010: // IOP DMA channel 0 base (SIF0)
     case 0x1F801020: // IOP DMA channel 1 base (SIF1)
@@ -55,7 +61,20 @@ static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint
     case 0x1F801110: case 0x1F801114: // IOP timers 2-3
     case 0x1F801120: case 0x1F801124: // IOP timers 4-5
     case 0x1F801130: case 0x1F801134: // IOP timers 6-7
-        if (!is_write) *val = 0;
+        if (!is_write) {
+            // Timer COUNT register (offset 0) returns incrementing value
+            // Timer MODE register (offset 4) returns mode with overflow cleared
+            uint32_t offset = addr & 0xF;
+            if (offset == 0) {
+                // COUNT: return a slowly incrementing counter
+                static uint32_t iop_timer_count[8] = {};
+                int idx = (addr >> 4) & 7;
+                iop_timer_count[idx] += 1;
+                *val = iop_timer_count[idx];
+            } else {
+                *val = 0; // MODE: return 0 (timer disabled)
+            }
+        }
         return true;
     case 0x1F801200: // SIO_STAT
         if (!is_write) *val = 0x05; // TX ready + TX finished
@@ -68,8 +87,16 @@ static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint
         else { g_iop_sif_mdma = wval; }
         return true;
     case 0x1F801570: // SIF MDMA
-    case 0x1F801574: case 0x1F801578:
+    case 0x1F801574:
         if (!is_write) *val = 0;
+        else {
+            // When IOP writes to SIF MDMA start, immediately mark transfer complete
+            // by setting SIF MDMA_STAT (0x1F801578) bit 0
+            g_iop_sif_mdma = wval;
+        }
+        return true;
+    case 0x1F801578: // SIF MDMA_STAT (read-only, signals DMA completion)
+        if (!is_write) *val = 0x01; // Transfer complete
         return true;
     case 0x1F80157C: // SIF semaphores
         if (!is_write) *val = g_iop_sif_sema;
@@ -100,9 +127,9 @@ static bool iop_hw_reg_handler(uint32_t addr, uint32_t* val, bool is_write, uint
     case 0x1F801D50: case 0x1F801D54: case 0x1F801D58: case 0x1F801D5C:
         if (!is_write) *val = 0;
         return true;
-    case 0x1F801E00: // CDVD
+    case 0x1F801E00: // CDVD_STAT
     case 0x1F801E80: // CDVD
-        if (!is_write) *val = 0;
+        if (!is_write) *val = 0x03; // Not busy + command complete
         return true;
     default:
         if (!is_write) *val = 0; // Unknown reg: read as 0
@@ -205,6 +232,18 @@ static bool iop_intercept_bios_call(IOP_Core* iop, uint32_t pc, uint32_t& new_pc
         bios_offset = pc - 0xBFC00000u;
     } else if (pc >= 0x1FC00000u && pc < 0x1FC04000u) {
         bios_offset = pc - 0x1FC00000u;
+    } else if (pc == 0x80000180u || pc == 0x80000000u) {
+        // IOP exception vector — handle SYSCALL/BREAK exceptions
+        if (iop->state.cop0[12] & 0x2) { // EXL bit set = real exception
+            uint32_t cause = iop->state.cop0[13];
+            uint32_t exc_code = (cause >> 2) & 0x1F;
+            uint32_t epc = iop->state.cop0[14];
+            LOGI("IOP Exception handler: ExcCode=%u EPC=0x%08X", exc_code, epc);
+            iop->state.cop0[12] &= ~0x2u; // Clear EXL
+            new_pc = epc + 4; // Skip past SYSCALL/BREAK
+            return true;
+        }
+        return false; // EXL not set, don't intercept
     } else {
         return false;
     }
@@ -297,8 +336,10 @@ static bool iop_intercept_bios_call(IOP_Core* iop, uint32_t pc, uint32_t& new_pc
         new_pc = pc + 8;
         return true;
     default:
-        if (bios_offset < 0x4000) {
-            LOGI("IOP BIOS HLE: Unknown function at offset 0x%04X (PC=0x%08X) -> NOP", bios_offset, pc);
+        // The full IOP BIOS ROM is 256KB (0x40000). Intercept all addresses in this range.
+        // NOP through everything — the IOP will eventually exit BIOS ROM into IOP RAM
+        // where IOP modules are loaded. This is the correct HLE behavior.
+        if (bios_offset < 0x40000) {
             new_pc = pc + 8;
             return true;
         }
@@ -340,6 +381,14 @@ void IOP_Core::run_cycles(int64_t cycles) {
         uint32_t bios_new_pc = 0;
         if (iop_intercept_bios_call(this, state.pc, bios_new_pc)) {
             state.pc = bios_new_pc;
+            cycles_run += 1;
+            continue;
+        }
+
+        // If PC is past BIOS ROM but still in KSEG1 range, the IOP has finished
+        // its ROM boot sequence. Loop back to BIOS entry to keep it alive.
+        if (state.pc >= 0xBFC40000u && state.pc < 0xC0000000u) {
+            state.pc = 0xBFC00000u;
             cycles_run += 1;
             continue;
         }
@@ -407,8 +456,23 @@ void IOP_Core::interpret_single_instruction() {
                 case 0x07: state.gpr[rd] = (int32_t)((int32_t)state.gpr[rt] >> (state.gpr[rs] & 0x1F)); break; // SRAV
                 case 0x08: will_branch = true; next_pc = state.gpr[rs]; break; // JR
                 case 0x09: state.gpr[rd ? rd : 31] = state.pc + 8; will_branch = true; next_pc = state.gpr[rs]; break; // JALR
-                case 0x0C: break; // SYSCALL - TODO: proper exception handling
-                case 0x0D: break; // BREAK
+                case 0x0C: { // SYSCALL
+                    // Set up exception: Cause.ExcCode=8, Status.EXL=1, EPC=PC
+                    state.cop0[13] = (state.cop0[13] & ~0x7C) | (8 << 2); // ExcCode=8
+                    state.cop0[12] |= 0x2; // EXL=1
+                    state.cop0[14] = state.pc; // EPC
+                    state.pc = 0x80000180; // Exception vector
+                    state.branch_delay = false;
+                    return; // Skip normal PC advancement
+                }
+                case 0x0D: { // BREAK
+                    state.cop0[13] = (state.cop0[13] & ~0x7C) | (9 << 2); // ExcCode=9
+                    state.cop0[12] |= 0x2; // EXL=1
+                    state.cop0[14] = state.pc;
+                    state.pc = 0x80000180;
+                    state.branch_delay = false;
+                    return;
+                }
                 case 0x10: state.gpr[rd] = (int32_t)state.hi; break; // MFHI
                 case 0x11: state.hi = (int32_t)state.gpr[rs]; break; // MTHI
                 case 0x12: state.gpr[rd] = (int32_t)state.lo; break; // MFLO

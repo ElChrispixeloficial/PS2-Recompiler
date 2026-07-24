@@ -9,6 +9,7 @@
 #include "iop/iop_core.h"
 #include "vu/vu_core.h"
 #include "bus/dma_controller.h"
+#include "bus/sif_bus.h"
 #include "iso/iso_loader.h"
 #include "bios/bios_native.h"
 #include "homebrew/pr2_homebrew.h"
@@ -35,7 +36,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static constexpr const char* BUILD_VERSION = "v0.2.2-exception-fix+IOP-HW";
+static constexpr const char* BUILD_VERSION = "v0.2.6-BIOS256K+relaxed-stuck";
 
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;
@@ -338,6 +339,10 @@ static void cpu_loop() {
     LOGI("CPU loop iniciado");
     uint32_t last_ee_pc = 0;
     int stuck_counter = 0;
+    uint32_t last_iop_pc = 0;
+    int iop_stuck_counter = 0;
+    bool iop_forced_halt = false;
+    int iop_halt_count = 0;
     int vblank_divider = 0;
 
     // Always initialize EE state via BIOS HLE (fast boot).
@@ -360,28 +365,96 @@ static void cpu_loop() {
         
         g_ee_iters++;
         
+        // ─── IOP stuck detection + SIF signaling ────────────────────────────
+        if (!g_iop->state.halted && !iop_forced_halt) {
+            uint32_t cur_iop_pc = g_iop->state.pc;
+            if (cur_iop_pc == last_iop_pc) {
+                iop_stuck_counter++;
+                if (iop_stuck_counter > 20000) {
+                    uint32_t stuck_instr = g_iop->read32(cur_iop_pc);
+                    uint32_t stuck_next = g_iop->read32(cur_iop_pc + 4);
+                    LOGI("IOP stuck at PC=0x%08X for %d iters, instr=0x%08X next=0x%08X", 
+                         cur_iop_pc, iop_stuck_counter, stuck_instr, stuck_next);
+                    // Set all SIF slave flags
+                    extern SIF_Bus g_sif_bus;
+                    g_sif_bus.smflg |= 0x01;
+                    g_sif_bus.msflg |= 0x01;
+                    g_iop->state.halted = true;
+                    iop_forced_halt = true;
+                    iop_halt_count++;
+                }
+            } else {
+                iop_stuck_counter = 0;
+            }
+            last_iop_pc = cur_iop_pc;
+        }
+        // When IOP is stuck AND EE is stuck for a long time, write SIF flags to
+        // EE RAM so the game can progress.
+        if (iop_forced_halt && stuck_counter > 500) {
+            extern SIF_Bus g_sif_bus;
+            extern uint8_t* g_ee_ram;
+            g_sif_bus.smflg |= 0x01;
+            g_sif_bus.msflg |= 0x01;
+            if (g_ee_ram) {
+                *(uint32_t*)(g_ee_ram + 0xF240) = 0x00000001;
+                *(uint32_t*)(g_ee_ram + 0xF260) = 0x00000001;
+                *(uint32_t*)(g_ee_ram + 0xF200) = 0x00010000;
+            }
+        }
+        // GPR dump when EE is stuck for a while — fires independently of IOP state.
+        // This lets us see what address the game is polling.
+        if (stuck_counter == 500 || stuck_counter == 5000) {
+            uint32_t epc = g_ee->state.pc;
+            uint32_t instr = g_ee->read32(epc);
+            uint32_t next = g_ee->read32(epc + 4);
+            LOGI("EE GPR DUMP (stuck #%d) PC=0x%08X instr=0x%08X next=0x%08X IOP_halt=%d",
+                 stuck_counter, epc, instr, next, iop_forced_halt ? 1 : 0);
+            LOGI("GPR: v0=0x%08X v1=0x%08X a0=0x%08X a1=0x%08X t0=0x%08X t1=0x%08X",
+                 (uint32_t)g_ee->state.gpr_lo[2], (uint32_t)g_ee->state.gpr_lo[3],
+                 (uint32_t)g_ee->state.gpr_lo[4], (uint32_t)g_ee->state.gpr_lo[5],
+                 (uint32_t)g_ee->state.gpr_lo[8], (uint32_t)g_ee->state.gpr_lo[9]);
+            LOGI("GPR: t2=0x%08X t3=0x%08X t4=0x%08X t5=0x%08X s0=0x%08X s1=0x%08X",
+                 (uint32_t)g_ee->state.gpr_lo[10], (uint32_t)g_ee->state.gpr_lo[11],
+                 (uint32_t)g_ee->state.gpr_lo[12], (uint32_t)g_ee->state.gpr_lo[13],
+                 (uint32_t)g_ee->state.gpr_lo[16], (uint32_t)g_ee->state.gpr_lo[17]);
+            LOGI("GPR: sp=0x%08X ra=0x%08X gp=0x%08X", 
+                 (uint32_t)g_ee->state.gpr_lo[29], (uint32_t)g_ee->state.gpr_lo[31],
+                 (uint32_t)g_ee->state.gpr_lo[28]);
+            uint32_t t1_val = (uint32_t)g_ee->state.gpr_lo[9];
+            extern uint8_t* g_ee_ram;
+            if (t1_val && t1_val < 0x02000000 && g_ee_ram) {
+                LOGI("Mem at t1+4 (0x%08X): %08X %08X %08X %08X", t1_val+4,
+                     *(uint32_t*)(g_ee_ram + t1_val + 4),
+                     *(uint32_t*)(g_ee_ram + t1_val + 8),
+                     *(uint32_t*)(g_ee_ram + t1_val + 12),
+                     *(uint32_t*)(g_ee_ram + t1_val + 16));
+            }
+        }
+
+        
         if (g_ee_iters % 15 == 0) { 
             uint32_t current_ee_pc = g_ee->state.pc;
             uint32_t current_iop_pc = g_iop->state.pc;
 
             if (current_ee_pc == last_ee_pc) {
                 stuck_counter++;
-                if (stuck_counter > 10) { 
+                if (stuck_counter > 50000) { 
                     g_critical_alert = true;
                     
                     uint32_t stuck_instr = g_ee->read32(current_ee_pc);
                     uint32_t next_instr = g_ee->read32(current_ee_pc + 4);
                     
                     snprintf(g_debug_text, sizeof(g_debug_text),
-                        "[!] ALERTA: BUCLE INFINITO DETECTADO\n\n"
+                        "[*] EE ESPERANDO (polling)\n\n"
                         "Build: %s\n"
-                        "Checkpoint: EE_ATASCADO_EN_PC\n"
-                        "EE PC: 0x%08X\nIOP PC: 0x%08X\n\n"
-                        "Instruccion actual: 0x%08X\n"
-                        "Siguiente instruccion: 0x%08X\n\n"
-                        "--- LOGS JIT IOP ---\n%s\n"
-                        "El JIT no sabe traducir esa instruccion.",
-                        BUILD_VERSION, current_ee_pc, current_iop_pc, stuck_instr, next_instr, g_jit_log_buffer);
+                        "EE PC: 0x%08X | IOP PC: 0x%08X\n"
+                        "Itrs: %d | IOP halt: %d\n\n"
+                        "Instr: 0x%08X\n"
+                        "Siguiente: 0x%08X\n\n"
+                        "--- IOP LOG ---\n%s",
+                        BUILD_VERSION, current_ee_pc, current_iop_pc,
+                        g_ee_iters, iop_forced_halt ? 1 : 0,
+                        stuck_instr, next_instr, g_jit_log_buffer);
                 }
             } else {
                 stuck_counter = 0;

@@ -16,6 +16,7 @@ EE_HW    g_ee_hw;
 SIF_Bus  g_sif_bus;
 
 extern DMA_Controller* g_dma_ptr;
+extern uint32_t g_iop_intc_stat;
 
 uint32_t hw_read32(EE_Core& ee, uint32_t addr) {
     // EE Timers — 0x10001000..0x100018FF
@@ -93,6 +94,19 @@ void hw_write32(EE_Core& ee, uint32_t addr, uint32_t val) {
 }
 
 bool hw_tick(int cycles) {
-    ee_hw_tick(g_ee_hw, cycles);
-    return (g_ee_hw.i_stat & g_ee_hw.i_mask) != 0;
+    bool irq = ee_hw_tick(g_ee_hw, cycles);
+    
+    // ─── IOP VBlank interrupt: fire VBlank bit (bit 4 = 0x10) in IOP INTC_STAT
+    //     periodically so IOP modules polling for VBlank can progress.
+    //     EE runs at 4915200/60 ≈ 81920 cycles per frame, IOP at 1/8 = 10240
+    static int iop_vblank_divider = 0;
+    iop_vblank_divider += cycles;
+    if (iop_vblank_divider >= 10240) {
+        iop_vblank_divider = 0;
+        // Directly set the VBlank bit in the IOP INTC_STAT variable
+        extern uint32_t g_iop_intc_stat;
+        g_iop_intc_stat |= 0x10; // IOP VBlank interrupt (bit 4)
+    }
+
+    return irq;
 }
