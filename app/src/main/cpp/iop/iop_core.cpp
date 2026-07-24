@@ -238,6 +238,12 @@ static bool iop_intercept_bios_call(IOP_Core* iop, uint32_t pc, uint32_t& new_pc
             uint32_t cause = iop->state.cop0[13];
             uint32_t exc_code = (cause >> 2) & 0x1F;
             uint32_t epc = iop->state.cop0[14];
+            // ExcCode=0 is interrupt — let the IOP JIT execute the handler
+            // at 0x80000180 to process SIF0 and other interrupts
+            if (exc_code == 0) {
+                LOGI("IOP Interrupt (ExcCode=0) at 0x80000180, letting JIT execute handler");
+                return false; // Don't intercept — let JIT run the handler code
+            }
             LOGI("IOP Exception handler: ExcCode=%u EPC=0x%08X", exc_code, epc);
             iop->state.cop0[12] &= ~0x2u; // Clear EXL
             new_pc = epc + 4; // Skip past SYSCALL/BREAK
@@ -336,10 +342,9 @@ static bool iop_intercept_bios_call(IOP_Core* iop, uint32_t pc, uint32_t& new_pc
         new_pc = pc + 8;
         return true;
     default:
-        // The full IOP BIOS ROM is 256KB (0x40000). Intercept all addresses in this range.
-        // NOP through everything — the IOP will eventually exit BIOS ROM into IOP RAM
-        // where IOP modules are loaded. This is the correct HLE behavior.
-        if (bios_offset < 0x40000) {
+        // IOP BIOS boot ROM is small (first 0x800 bytes). Beyond that is IOP module code
+        // that must actually execute. Only NOP the boot ROM area.
+        if (bios_offset < 0x800) {
             new_pc = pc + 8;
             return true;
         }
@@ -399,6 +404,18 @@ void IOP_Core::run_cycles(int64_t cycles) {
             char log_buf[128];
             snprintf(log_buf, sizeof(log_buf), "IOP Run PC: 0x%08X\n", state.pc);
             push_jit_log(log_buf);
+        }
+
+        // IOP interrupt check: if IE=1, EXL=0, and INTC pending & mask non-zero, take interrupt
+        if ((state.cop0[12] & 1) && !(state.cop0[12] & 2)) {
+            uint32_t pending = g_iop_intc_stat & g_iop_intc_mask;
+            if (pending) {
+                state.cop0[13] = (state.cop0[13] & ~0x7F00) | ((pending & 0x7F) << 8);
+                state.cop0[14] = state.pc;
+                state.cop0[12] |= 0x2; // EXL
+                state.pc = 0x80000180;
+                state.branch_delay = false;
+            }
         }
 
         if (jit && cache) {

@@ -186,3 +186,15 @@ bool ee_hw_tick(EE_HW& hw, int cycles) {
     }
     return (hw.i_stat & hw.i_mask) != 0;
 }
+
+void ee_hw_raise_interrupt(EE_HW& hw, uint32_t bit) {
+    if (bit < 32) {
+        hw.i_stat |= (1u << bit);
+    }
+}
+
+void ee_hw_clear_interrupt(EE_HW& hw, uint32_t bit) {
+    if (bit < 32) {
+        hw.i_stat &= ~(1u << bit);
+    }
+}

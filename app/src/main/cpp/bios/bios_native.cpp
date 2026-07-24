@@ -92,44 +92,126 @@ void PS2_BIOS::execute_hle() {
 
     uint32_t* ee_ram = (uint32_t*)g_ee_native->get_ram();
 
-    // 1. Initialize SIF mailbox to wake EE from kernel loop
-    ee_ram[0x0000F200 >> 2] = 0x00010000;
-    ee_ram[0x0000F240 >> 2] = 0x00000001; // SIF.SIF_RPCInitialize
-
-    // 2. Setup kernel structures in EE RAM
-    // Only clear the kernel stack area (low memory 0-64KB), NOT where game code lives
+    // 1. Clear kernel area (first 64KB) — MUST be done first
     memset(g_ee_native->get_ram(), 0, 0x00010000);
 
-    // 3. Setup COP0 registers
+    // 2. Setup PS2 kernel data area (0x00-0xFF)
+    // Exception handler vectors (copied from BIOS ROM by real boot)
+    ee_ram[0x00 >> 2] = 0x08000060;  // j 0x80000180 (General exception)
+    ee_ram[0x04 >> 2] = 0x00000000;  // nop
+    ee_ram[0x08 >> 2] = 0x08000080;  // j 0x80000200 (Interrupt handler)
+    ee_ram[0x0C >> 2] = 0x00000000;  // nop
+
+    // Kernel data area — game reads from here (s1=0x10, polls addr 0x14)
+    ee_ram[0x10 >> 2] = 0x00000001;  // Kernel initialized flag
+    ee_ram[0x14 >> 2] = 0x00000001;  // "IOP ready" / kernel status
+    ee_ram[0x18 >> 2] = 0x00000001;  // Module count / boot stage
+    ee_ram[0x1C >> 2] = 0x00000001;  // Additional init flag
+
+    // Thread control block area (typical values)
+    ee_ram[0x20 >> 2] = 0x00000001;  // TCBS count
+    ee_ram[0x24 >> 2] = 0x00100000;  // Kernel heap start
+
+    // 3. Initialize SIF mailbox to wake EE from kernel loop
+    ee_ram[0x0000F200 >> 2] = 0x00010000;
+    ee_ram[0x0000F240 >> 2] = 0x00000001; // SIF.SIF_RPCInitialize
+    ee_ram[0x0000F260 >> 2] = 0x00000001; // SIF control flag
+
+    // 4. Setup COP0 registers
     // Status: BEV=1, ERL=1 (initial state after reset)
     g_ee_native->state.cop0[12] = 0x00000004; // Status: BEV=1
     // PRId: R5900 revision (COP0 reg15 — note: EBASE is separate via Select register)
     g_ee_native->state.cop0[15] = 0x00002E20;
 
-    // 4. Setup TLB (minimal: map KSEG0/KSEG1 as unmapped)
+    // 5. Setup TLB (minimal: map KSEG0/KSEG1 as unmapped)
     // These are handled by the address masking in ee_memory.h
 
-    // 5. Setup Stack Pointer and Frame Pointer
+    // 6. Setup Stack Pointer and Frame Pointer
     g_ee_native->state.gpr_lo[SP] = 0x01FFFFF0;
     g_ee_native->state.gpr_lo[GP] = 0; // GP will be set by game
 
-    // 6. Clear return address
+    // 7. Clear return address
     g_ee_native->state.gpr_lo[RA] = 0;
 
-    // 7. Enable interrupts
+    // 8. Enable interrupts
     g_ee_native->state.cop0[12] = 0x00010401; // Status: IE=1, EXL=0, KSU=0
 
-    // 8. Jump to game entry point
+    // 9. Jump to game entry point
     g_ee_native->state.pc = g_game_entry_point;
     LOGI("HLE boot: EE jumping to 0x%08X", g_game_entry_point);
 
-    // 9. Start IOP from BIOS ROM entry — it will run BIOS HLE stubs
+    // 10. Start IOP from BIOS ROM entry — it will run BIOS HLE stubs
     //    (SetSifInit, GsInitGraph, etc.) and halt via Exit function.
     //    CRITICAL: IOP must be alive for SIF communication with the game.
     if (g_iop_native) {
         g_iop_native->state.pc = 0xBFC00000;
         g_iop_native->state.halted = false;
-        LOGI("HLE boot: IOP started at 0xBFC00000 (BIOS HLE active)");
+        // Enable IOP interrupts: IE=1, IM[2]=1 (INTC), IM[3]=1 (DMAC)
+        g_iop_native->state.cop0[12] = 0x0000080C; // IE=1, IM2=1(INTC), IM3=1(DMAC)
+        g_iop_native->state.cop0[13] = 0; // Cause
+        // Enable IOP INTC for SIF (bit 7) so IOP can process SIF RPCs
+        extern uint32_t g_iop_intc_mask;
+        g_iop_intc_mask = (1u << 7); // Enable SIF interrupt on IOP
+        LOGI("HLE boot: IOP started at 0xBFC00000 (BIOS HLE active, interrupts enabled)");
+
+        // Write IOP exception handler at offset 0x180 in IOP RAM.
+        // When IOP takes an interrupt (PC jumps to 0x80000180 = phys 0x180),
+        // this handler processes SIF0 interrupts and signals completion to EE.
+        //
+        // Assembled MIPS R3000A code:
+        //   addiu $sp, $sp, -8
+        //   sw    $t0, 0($sp)
+        //   sw    $t1, 4($sp)
+        //   lui   $t0, 0x1F80          ; INTC base
+        //   lw    $t1, 0x1070($t0)     ; $t1 = INTC_STAT
+        //   andi  $t2, $t1, 0x80       ; $t2 = SIF bit (bit 7)
+        //   beq   $t2, $zero, skip     ; if no SIF, skip
+        //   nop
+        //   sw    $t2, 0x1070($t0)     ; clear SIF from INTC_STAT (W1C)
+        //   lui   $t0, 0x1000          ; SIF base
+        //   ori   $t0, $t0, 0xF2C0     ; $t0 = &SMFLG
+        //   lw    $t1, 0($t0)
+        //   ori   $t1, $t1, 1
+        //   sw    $t1, 0($t0)          ; SMFLG |= 1
+        //   lui   $t0, 0x1000
+        //   ori   $t0, $t0, 0xF260     ; $t0 = &MSFLG
+        //   lw    $t1, 0($t0)
+        //   ori   $t1, $t1, 1
+        //   sw    $t1, 0($t0)          ; MSFLG |= 1
+        // skip:
+        //   lw    $t0, 0($sp)
+        //   lw    $t1, 4($sp)
+        //   addiu $sp, $sp, 8
+        //   eret
+        //   nop
+        uint32_t* iop = (uint32_t*)(g_iop_native->get_ram() + 0x180);
+        int p = 0;
+        iop[p++] = 0x27BDFFF8; // addiu $sp, $sp, -8
+        iop[p++] = 0xAF880000; // sw $t0, 0($sp)
+        iop[p++] = 0xAF890004; // sw $t1, 4($sp)
+        iop[p++] = 0x3C081F80; // lui $t0, 0x1F80
+        iop[p++] = 0x8D091070; // lw $t1, 0x1070($t0)  — INTC_STAT
+        iop[p++] = 0x312A0080; // andi $t2, $t1, 0x80  — SIF bit
+        iop[p++] = 0x1140000B; // beq $t2, $zero, skip (+11)
+        iop[p++] = 0x00000000; // nop (delay slot)
+        iop[p++] = 0xAD0A1070; // sw $t2, 0x1070($t0)  — clear SIF
+        iop[p++] = 0x3C081000; // lui $t0, 0x1000
+        iop[p++] = 0x3508F2C0; // ori $t0, $t0, 0xF2C0 — &SMFLG
+        iop[p++] = 0x8D090000; // lw $t1, 0($t0)
+        iop[p++] = 0x35290001; // ori $t1, $t1, 1
+        iop[p++] = 0xAD090000; // sw $t1, 0($t0)       — SMFLG |= 1
+        iop[p++] = 0x3C081000; // lui $t0, 0x1000
+        iop[p++] = 0x3508F260; // ori $t0, $t0, 0xF260 — &MSFLG
+        iop[p++] = 0x8D090000; // lw $t1, 0($t0)
+        iop[p++] = 0x35290001; // ori $t1, $t1, 1
+        iop[p++] = 0xAD090000; // sw $t1, 0($t0)       — MSFLG |= 1
+        // skip:
+        iop[p++] = 0x8FA80000; // lw $t0, 0($sp)
+        iop[p++] = 0x8FA90004; // lw $t1, 4($sp)
+        iop[p++] = 0x27BD0008; // addiu $sp, $sp, 8
+        iop[p++] = 0x42000010; // eret
+        iop[p++] = 0x00000000; // nop
+        LOGI("HLE boot: IOP exception handler written at 0x180 (%d words)", p);
     }
 
     g_bios_initialized = true;

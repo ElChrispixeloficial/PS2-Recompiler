@@ -20,3 +20,5 @@ void ee_hw_init(EE_HW& hw);
 uint32_t ee_hw_read32(EE_HW& hw, uint32_t phys_addr);
 void ee_hw_write32(EE_HW& hw, uint32_t phys_addr, uint32_t val);
 bool ee_hw_tick(EE_HW& hw, int cycles);
+void ee_hw_raise_interrupt(EE_HW& hw, uint32_t bit);
+void ee_hw_clear_interrupt(EE_HW& hw, uint32_t bit);

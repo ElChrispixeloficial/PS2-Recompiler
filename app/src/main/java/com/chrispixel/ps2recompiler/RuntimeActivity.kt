@@ -48,6 +48,7 @@ class RuntimeActivity : AppCompatActivity() {
     private lateinit var binding: ActivityRuntimeBinding
     private var isoPath   = ""
     private var gameTitle = ""
+    private var recompMode = "jit"
     private var isPaused  = false
     private var isLoaded  = false
     private var loadStarted = false
@@ -66,11 +67,12 @@ class RuntimeActivity : AppCompatActivity() {
 
         isoPath   = intent.getStringExtra(EXTRA_ISO_PATH)   ?: ""
         gameTitle = intent.getStringExtra(EXTRA_GAME_TITLE) ?: "Juego"
+        recompMode = intent.getStringExtra("recomp_mode") ?: "jit"
         if (isoPath.isEmpty()) { finish(); return }
         
         immersive()
-        binding.tvGameTitle.text  = gameTitle
-        binding.tvPausedGame.text = gameTitle
+        binding.tvGameTitle.text  = "$gameTitle [${recompMode.uppercase()}]"
+        binding.tvPausedGame.text = "$gameTitle [${recompMode.uppercase()}]"
         
         // --- CREAR VISTA DE DEBUG POR CÓDIGO (NO TOCAS XML) ---
         setupDebugOverlay()

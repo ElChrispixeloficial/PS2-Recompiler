@@ -278,14 +278,32 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // Selector de metodo de recompilacion antes de lanzar
+        val methods = arrayOf(
+            "JIT RECOMPILER (Estable)",
+            "AOT (Experimental)"
+        )
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Metodo de Recompilacion")
+            .setMessage("Selecciona el metodo para: ${game.title}")
+            .setItems(methods) { _, which ->
+                val mode = if (which == 0) "jit" else "aot"
+                startGameWithMode(game, mode)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun startGameWithMode(game: GameEntry, mode: String) {
         GameLibrary.updateLastPlayed(this, game.isoPath)
-        
+
         val biosPath = getSharedPreferences("ps2_prefs", MODE_PRIVATE).getString("bios_path", "")
-        
+
         val intent = Intent(this, RuntimeActivity::class.java).apply {
             putExtra(RuntimeActivity.EXTRA_ISO_PATH, game.isoPath)
             putExtra(RuntimeActivity.EXTRA_GAME_TITLE, game.title)
             putExtra("bios_path", biosPath)
+            putExtra("recomp_mode", mode)
         }
         startActivity(intent,
             ActivityOptionsCompat.makeSceneTransitionAnimation(this).toBundle())

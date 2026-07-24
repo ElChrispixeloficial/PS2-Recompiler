@@ -19,3 +19,4 @@ struct SIF_Bus {
 void     sif_init(SIF_Bus& sif);
 uint32_t sif_read32(SIF_Bus& sif, uint32_t addr);
 void     sif_write32(SIF_Bus& sif, uint32_t addr, uint32_t val);
+void     sif_signal_rpc_complete(SIF_Bus& sif);

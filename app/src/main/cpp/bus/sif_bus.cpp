@@ -67,3 +67,11 @@ void sif_write32(SIF_Bus& sif, uint32_t addr, uint32_t val) {
             break;
     }
 }
+
+// Called when SIF0 DMA completes (EE→IOP RPC request sent).
+// Simulates IOP processing: sets completion flags so EE's polling code unblocks.
+void sif_signal_rpc_complete(SIF_Bus& sif) {
+    sif.smflg |= 0x01;  // IOP slave flag = IOP processed the request
+    sif.msflg |= 0x01;  // Master flag = EE sees completion
+    LOGI("SIF RPC complete: SMFLG=0x%08X MSFLG=0x%08X", sif.smflg, sif.msflg);
+}

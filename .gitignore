@@ -9,4 +9,4 @@
 .externalNativeBuild
 .cxx
 /app/build/
-/app/.cxx/
+/app/.cxx/keystore.jks

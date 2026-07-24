@@ -3,6 +3,8 @@
 #include "../vu/vu_core.h"
 #include "../vu/vif_unpacker.h"
 #include "../iop/iop_core.h"
+#include "../bus/sif_bus.h"
+#include "../bus/ee_hw.h"
 #include <android/log.h>
 #include <cstring>
 
@@ -119,8 +121,6 @@ void DMA_Controller::route_transfer(DMA_Channel ch, uint32_t addr, uint32_t qwc)
             // SIF0: EE → IOP data transfer
             LOGI("DMA SIF0: %u QWC from 0x%08X (EE→IOP)", qwc, addr);
             if (!g_ee_ram || qwc == 0) break;
-            // Map EE physical address to IOP RAM (SIF0 transfers from EE to IOP)
-            // IOP sees EE addresses in the 0x01000000+ range, map to IOP RAM offset
             extern uint8_t* g_iop_ram_ptr;
             if (g_iop_ram_ptr) {
                 uint32_t iop_dest = addr & (IOP_RAM_SIZE - 1);
@@ -129,6 +129,17 @@ void DMA_Controller::route_transfer(DMA_Channel ch, uint32_t addr, uint32_t qwc)
                     LOGI("DMA SIF0: copied %u QWC to IOP RAM+0x%08X", qwc, iop_dest);
                 }
             }
+            // Simulate IOP RPC completion: set SIF flags + raise EE SIF interrupt.
+            // Without this, SifInitRpc/SifBindRpc/SifCallRpc poll forever.
+            extern SIF_Bus g_sif_bus;
+            sif_signal_rpc_complete(g_sif_bus);
+            extern EE_HW g_ee_hw;
+            ee_hw_raise_interrupt(g_ee_hw, 25); // SIF interrupt on EE
+
+            // Also raise IOP INTC for SIF0 (IRQ 23) so IOP processes the data
+            extern uint32_t g_iop_intc_stat;
+            g_iop_intc_stat |= (1u << 23); // SIF0 interrupt pending on IOP
+            LOGI("DMA SIF0: raised IOP INTC SIF0 (IRQ23), IOP INTC_STAT=0x%08X", g_iop_intc_stat);
             break;
         }
 

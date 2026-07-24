@@ -36,7 +36,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-static constexpr const char* BUILD_VERSION = "v0.2.7-diagnostics+COP0";
+static constexpr const char* BUILD_VERSION = "Build 7";
 
 extern uint8_t* g_bios;
 extern EE_Core* g_ee_core_ptr;
@@ -59,6 +59,105 @@ uint64_t g_last_gs_reg;
 uint8_t g_last_gs_addr;
 
 static constexpr int64_t EE_CYCLES = 4915200 / 60;
+
+static const char* mips_reg_name(int r) {
+    static const char* names[] = {"$zero","$at","$v0","$v1","$a0","$a1","$a2","$a3",
+        "$t0","$t1","$t2","$t3","$t4","$t5","$t6","$t7",
+        "$s0","$s1","$s2","$s3","$s4","$s5","$s6","$s7",
+        "$t8","$t9","$k0","$k1","$gp","$sp","$fp","$ra"};
+    return (r >= 0 && r < 32) ? names[r] : "???";
+}
+
+static void disasm_mips(uint32_t pc, uint32_t instr, char* buf, int bufsz) {
+    int op = (instr >> 26) & 0x3F;
+    int rs = (instr >> 21) & 0x1F;
+    int rt = (instr >> 16) & 0x1F;
+    int rd = (instr >> 11) & 0x1F;
+    int shamt = (instr >> 6) & 0x1F;
+    int funct = instr & 0x3F;
+    int16_t imm = (int16_t)(instr & 0xFFFF);
+    uint32_t uimm = instr & 0xFFFF;
+    uint32_t target = (pc & 0xF0000000) | ((instr & 0x03FFFFFF) << 2);
+
+    if (instr == 0) { snprintf(buf, bufsz, "nop"); return; }
+
+    switch (op) {
+    case 0x00: // SPECIAL
+        switch (funct) {
+        case 0x20: snprintf(buf, bufsz, "add  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x21: snprintf(buf, bufsz, "addu %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x22: snprintf(buf, bufsz, "sub  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x23: snprintf(buf, bufsz, "subu %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x24: snprintf(buf, bufsz, "and  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x25: snprintf(buf, bufsz, "or   %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x26: snprintf(buf, bufsz, "xor  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x27: snprintf(buf, bufsz, "nor  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x00: snprintf(buf, bufsz, "sll  %s, %s, %d", mips_reg_name(rd), mips_reg_name(rt), shamt); return;
+        case 0x02: snprintf(buf, bufsz, "srl  %s, %s, %d", mips_reg_name(rd), mips_reg_name(rt), shamt); return;
+        case 0x03: snprintf(buf, bufsz, "sra  %s, %s, %d", mips_reg_name(rd), mips_reg_name(rt), shamt); return;
+        case 0x04: snprintf(buf, bufsz, "sllv %s, %s, %s", mips_reg_name(rd), mips_reg_name(rt), mips_reg_name(rs)); return;
+        case 0x06: snprintf(buf, bufsz, "srlv %s, %s, %s", mips_reg_name(rd), mips_reg_name(rt), mips_reg_name(rs)); return;
+        case 0x07: snprintf(buf, bufsz, "srav %s, %s, %s", mips_reg_name(rd), mips_reg_name(rt), mips_reg_name(rs)); return;
+        case 0x08: snprintf(buf, bufsz, "jr   %s", mips_reg_name(rs)); return;
+        case 0x09: snprintf(buf, bufsz, "jalr %s, %s", mips_reg_name(rd), mips_reg_name(rs)); return;
+        case 0x10: snprintf(buf, bufsz, "mfhi %s", mips_reg_name(rd)); return;
+        case 0x11: snprintf(buf, bufsz, "mthi %s", mips_reg_name(rs)); return;
+        case 0x12: snprintf(buf, bufsz, "mflo %s", mips_reg_name(rd)); return;
+        case 0x13: snprintf(buf, bufsz, "mtlo %s", mips_reg_name(rs)); return;
+        case 0x18: snprintf(buf, bufsz, "mult %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x19: snprintf(buf, bufsz, "multu %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x1A: snprintf(buf, bufsz, "div  %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x1B: snprintf(buf, bufsz, "divu %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x0C: snprintf(buf, bufsz, "syscall"); return;
+        case 0x0D: snprintf(buf, bufsz, "break"); return;
+        case 0x2A: snprintf(buf, bufsz, "slt  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x2B: snprintf(buf, bufsz, "sltu %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        default: break;
+        }
+        break;
+    case 0x01: { // REGIMM
+        int sub = (instr >> 16) & 0x1F;
+        if (sub == 0x00) { snprintf(buf, bufsz, "bltz %s, %d", mips_reg_name(rs), imm); return; }
+        if (sub == 0x01) { snprintf(buf, bufsz, "bgez %s, %d", mips_reg_name(rs), imm); return; }
+        break;
+    }
+    case 0x02: snprintf(buf, bufsz, "j    0x%08X", target); return;
+    case 0x03: snprintf(buf, bufsz, "jal  0x%08X", target); return;
+    case 0x04: snprintf(buf, bufsz, "beq  %s, %s, %d", mips_reg_name(rs), mips_reg_name(rt), imm); return;
+    case 0x05: snprintf(buf, bufsz, "bne  %s, %s, %d", mips_reg_name(rs), mips_reg_name(rt), imm); return;
+    case 0x06: snprintf(buf, bufsz, "blez %s, %d", mips_reg_name(rs), imm); return;
+    case 0x07: snprintf(buf, bufsz, "bgtz %s, %d", mips_reg_name(rs), imm); return;
+    case 0x08: snprintf(buf, bufsz, "addi %s, %s, %d", mips_reg_name(rt), mips_reg_name(rs), imm); return;
+    case 0x09: snprintf(buf, bufsz, "addiu %s, %s, %d", mips_reg_name(rt), mips_reg_name(rs), imm); return;
+    case 0x0A: snprintf(buf, bufsz, "slti %s, %s, %d", mips_reg_name(rt), mips_reg_name(rs), imm); return;
+    case 0x0B: snprintf(buf, bufsz, "sltiu %s, %s, %d", mips_reg_name(rt), mips_reg_name(rs), imm); return;
+    case 0x0C: snprintf(buf, bufsz, "andi %s, %s, 0x%04X", mips_reg_name(rt), mips_reg_name(rs), uimm); return;
+    case 0x0D: snprintf(buf, bufsz, "ori  %s, %s, 0x%04X", mips_reg_name(rt), mips_reg_name(rs), uimm); return;
+    case 0x0E: snprintf(buf, bufsz, "xori %s, %s, 0x%04X", mips_reg_name(rt), mips_reg_name(rs), uimm); return;
+    case 0x0F: snprintf(buf, bufsz, "lui  %s, 0x%04X", mips_reg_name(rt), uimm); return;
+    case 0x20: snprintf(buf, bufsz, "lb   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x21: snprintf(buf, bufsz, "lh   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x23: snprintf(buf, bufsz, "lw   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x24: snprintf(buf, bufsz, "lbu  %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x25: snprintf(buf, bufsz, "lhu  %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x28: snprintf(buf, bufsz, "sb   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x29: snprintf(buf, bufsz, "sh   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x2B: snprintf(buf, bufsz, "sw   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x30: snprintf(buf, bufsz, "ll   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x38: snprintf(buf, bufsz, "sq   %s, %d(%s)", mips_reg_name(rt), imm, mips_reg_name(rs)); return;
+    case 0x1C: { // SPECIAL2
+        switch (funct) {
+        case 0x02: snprintf(buf, bufsz, "mul  %s, %s, %s", mips_reg_name(rd), mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x00: snprintf(buf, bufsz, "madd %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        case 0x01: snprintf(buf, bufsz, "maddu %s, %s", mips_reg_name(rs), mips_reg_name(rt)); return;
+        default: break;
+        }
+        break;
+    }
+    default: break;
+    }
+    snprintf(buf, bufsz, ".word 0x%08X", instr);
+}
 
 static char g_debug_text[4096] = "Iniciando sistema...\n";
 static bool g_critical_alert = false;
@@ -402,7 +501,7 @@ static void cpu_loop() {
             }
         }
         // GPR dump when EE is stuck — fires quickly (stuck_counter == 30 = ~450 iters)
-        if (stuck_counter == 30 || stuck_counter == 300 || stuck_counter == 3000) {
+        if (stuck_counter == 1 || stuck_counter == 30 || stuck_counter == 300 || stuck_counter == 3000) {
             uint32_t epc = g_ee->state.pc;
             uint32_t instr = g_ee->read32(epc);
             uint32_t next = g_ee->read32(epc + 4);
@@ -438,6 +537,42 @@ static void cpu_loop() {
                      *(uint32_t*)(g_ee_ram + t1_val + 12),
                      *(uint32_t*)(g_ee_ram + t1_val + 16));
             }
+            // Also dump s1+4 — the actual address LW v1,4(s1) reads from
+            uint32_t s1_val = (uint32_t)g_ee->state.gpr_lo[17];
+            if (s1_val && s1_val < 0x02000000 && g_ee_ram) {
+                LOGI("Mem[s1+4](0x%08X): %08X %08X %08X %08X", s1_val+4,
+                     *(uint32_t*)(g_ee_ram + s1_val + 4),
+                     *(uint32_t*)(g_ee_ram + s1_val + 8),
+                     *(uint32_t*)(g_ee_ram + s1_val + 12),
+                     *(uint32_t*)(g_ee_ram + s1_val + 16));
+            }
+            // Dump stack region around sp for context
+            uint32_t sp_val = (uint32_t)g_ee->state.gpr_lo[29];
+            if (sp_val && sp_val < 0x02000000 && g_ee_ram) {
+                LOGI("Stack[sp-16..sp+16](0x%08X):", sp_val);
+                for (int i = -16; i <= 16; i += 4) {
+                    uint32_t a = sp_val + i;
+                    if (a < 0x02000000) {
+                        LOGI("  [%+3d] 0x%08X = 0x%08X", i, a,
+                             *(uint32_t*)(g_ee_ram + a));
+                    }
+                }
+            }
+            // Dump disassembly of instructions around stuck PC
+            {
+                LOGI("=== CODE DISASSEMBLY around PC=0x%08X ===", epc);
+                char disbuf[128];
+                for (int i = -16; i <= 8; i++) {
+                    uint32_t a = epc + (i * 4);
+                    if (a < 0x02000000 && g_ee_ram) {
+                        uint32_t d = *(uint32_t*)(g_ee_ram + a);
+                        disasm_mips(a, d, disbuf, sizeof(disbuf));
+                        LOGI("  %c 0x%08X: %08X  %s",
+                             (i == 0) ? '>' : ' ', a, d, disbuf);
+                    }
+                }
+                LOGI("=== END DISASSEMBLY ===");
+            }
         }
 
         
@@ -450,18 +585,35 @@ static void cpu_loop() {
             if (current_ee_pc == last_ee_pc) {
                 stuck_counter++;
                 g_critical_alert = true;
+
+                char poll_info[128] = "";
+                extern uint8_t* g_ee_ram;
+                // Decode LW v1, 4(s1) at 0x0017D378 — show what the game polls
+                if (current_ee_pc == 0x0017D378 && g_ee_ram) {
+                    uint32_t s1 = (uint32_t)g_ee->state.gpr_lo[17];
+                    uint32_t addr = s1 + 4;
+                    uint32_t val = (addr < 0x02000000) ? *(uint32_t*)(g_ee_ram + addr) : 0;
+                    // Disassemble next instruction (the branch at PC+4)
+                    char branch_dis[64] = "";
+                    uint32_t branch_instr = g_ee->read32(current_ee_pc + 4);
+                    disasm_mips(current_ee_pc + 4, branch_instr, branch_dis, sizeof(branch_dis));
+                    snprintf(poll_info, sizeof(poll_info),
+                        "\nPoll @0x%08X: %08X\n(s1=0x%08X v1=%08X)\nNext: %s",
+                        addr, val, s1, (uint32_t)g_ee->state.gpr_lo[3], branch_dis);
+                }
+
                 snprintf(g_debug_text, sizeof(g_debug_text),
                     "[*] EE ESPERANDO\n\n"
                     "Build: %s\n"
                     "EE PC: 0x%08X | IOP: 0x%08X\n"
                     "Itrs: %d | GS: %d | Vk: %d\n"
                     "Stuck: %d | IOP halt: %d\n\n"
-                    "Instr: 0x%08X\nNext: 0x%08X\n\n"
+                    "Instr: 0x%08X\nNext: 0x%08X%s\n\n"
                     "--- IOP ---\n%s",
                     BUILD_VERSION, current_ee_pc, current_iop_pc,
                     g_ee_iters, g_gs_writes, g_vulkan_draws,
                     stuck_counter, iop_forced_halt ? 1 : 0,
-                    stuck_instr, next_instr, g_jit_log_buffer);
+                    stuck_instr, next_instr, poll_info, g_jit_log_buffer);
             } else {
                 stuck_counter = 0;
                 g_critical_alert = false;
